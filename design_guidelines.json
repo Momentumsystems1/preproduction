@@ -1,0 +1,146 @@
+{
+  "theme": "dark",
+  "archetype": "2 (Performance Pro - Tactical Command Center)",
+  "emotional_tone": "Operational, professional, reliable, high-tech, tactical",
+  "typography": {
+    "headings": {
+      "font_family": "Outfit",
+      "weights": ["400", "500", "700"],
+      "usage": "Headers, primary titles, panel headers",
+      "import_url": "https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700&display=swap"
+    },
+    "body": {
+      "font_family": "Manrope",
+      "weights": ["400", "500", "600"],
+      "usage": "General text, descriptions, labels",
+      "import_url": "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600&display=swap"
+    },
+    "mono": {
+      "font_family": "IBM Plex Mono",
+      "weights": ["400", "600", "700"],
+      "usage": "Data, KPIs, coordinates, live metrics, status codes",
+      "import_url": "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&display=swap"
+    }
+  },
+  "colors": {
+    "background": {
+      "primary": "#0A0A0A",
+      "secondary": "#121212",
+      "tertiary": "#1A1A1A",
+      "panel_overlay": "rgba(10, 10, 10, 0.75)"
+    },
+    "text": {
+      "primary": "#FFFFFF",
+      "secondary": "#A1A1AA",
+      "muted": "#71717A"
+    },
+    "border": {
+      "default": "rgba(255, 255, 255, 0.1)",
+      "focus": "rgba(255, 255, 255, 0.3)"
+    },
+    "status": {
+      "critical": "#EF4444",
+      "warning": "#F59E0B",
+      "info": "#3B82F6",
+      "success": "#10B981",
+      "live": "#06B6D4"
+    },
+    "event_types": {
+      "obras": "#F59E0B",
+      "accidente": "#EF4444",
+      "congestion": "#8B5CF6",
+      "peligro": "#F97316"
+    }
+  },
+  "layout": {
+    "strategy": "Command Center Map Overlay",
+    "structure": {
+      "map": "Full viewport absolute positioning. Occupies 100% width and height.",
+      "header": "Floating at the top, z-index 50, crystal glassmorphism.",
+      "left_panel": "Floating left sidebar (approx 350px width), z-index 40, for KPIs and Event Queue. 16px margin from edges.",
+      "right_panel": "Floating right sidebar (approx 350px width), z-index 40, for Event Detail and controls. 16px margin from edges.",
+      "footer": "Floating at the bottom, full width minus margins, thin status bar for health indicators."
+    },
+    "spacing": "Dense, utilitarian. gap-4, p-4, tight margins to maximize map visibility.",
+    "border_radius": "Sharp to slight rounding. Use rounded-md (6px) or rounded-lg (8px) max. Avoid pill shapes unless for specific tags."
+  },
+  "surfaces": {
+    "panels": {
+      "background": "bg-black/60",
+      "backdrop_filter": "backdrop-blur-xl backdrop-saturate-150",
+      "border": "border border-white/10",
+      "shadow": "shadow-[0_8px_32px_rgba(0,0,0,0.5)]"
+    },
+    "active_states": {
+      "background": "bg-white/5",
+      "border": "border-white/20"
+    }
+  },
+  "components": {
+    "buttons": {
+      "style": "Flat, sharp edges or 6px radius. 1px border.",
+      "hover": "Slight brightness increase, no dramatic scaling to keep it professional."
+    },
+    "kpi_cards": {
+      "style": "Grid border layout (border-r border-b border-white/10). Mono font for numbers, large (text-3xl tracking-tight).",
+      "alignment": "Left aligned text."
+    },
+    "event_queue_item": {
+      "style": "Compact list item, border-l-2 based on event status color. Darker background on hover.",
+      "iconography": "Lucide icons indicating event type. Small, high contrast."
+    },
+    "live_indicator": {
+      "style": "Pulsing dot animation using keyframes (animate-pulse) next to 'LIVE' mono text. Color: cyan or red depending on data feed status."
+    }
+  },
+  "iconography": {
+    "library": "lucide-react",
+    "usage_rules": "Use solid, clear strokes. 16px or 20px sizes.",
+    "specific_icons": {
+      "obras": "Construction",
+      "accidente": "AlertTriangle",
+      "congestion": "TrendingUp",
+      "peligro": "OctagonAlert",
+      "medir_calle": "Ruler",
+      "capas": "Layers",
+      "radar": "Radio",
+      "parking": "SquareParking"
+    }
+  },
+  "motion_and_interactions": {
+    "radar_scanner": "Subtle radar sweeping animation on map overlays or loading states.",
+    "hover_effects": "bg-white/5 for row hover states in event queue. Ensure high contrast focus rings (ring-1 ring-white/30).",
+    "transitions": "Fast, mechanical transitions. 150ms ease-in-out."
+  },
+  "media": {
+    "image_urls": {
+      "user_avatar": {
+        "url": "https://images.pexels.com/photos/7832476/pexels-photo-7832476.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "User avatar for the header profile dropdown."
+      },
+      "map_placeholder": {
+        "url": "https://images.unsplash.com/photo-1554381316-14cf94cbe791?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NTJ8MHwxfHNlYXJjaHwyfHxkYXJrJTIwc2F0ZWxsaXRlJTIwbWFwJTIwdGV4dHVyZXxlbnwwfHx8fDE3ODExMzM0MTB8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Fallback texture if MapLibre tiles are loading."
+      }
+    }
+  },
+  "libraries": {
+    "map": "maplibre-gl",
+    "icons": "lucide-react",
+    "ui": "shadcn/ui",
+    "styling": "tailwindcss"
+  },
+  "instructions_to_main_agent": [
+    "Install `maplibre-gl` for the main map interface. The map MUST cover the entire background.",
+    "Install specified fonts (Outfit, Manrope, IBM Plex Mono) via Google Fonts in index.html.",
+    "All panels (header, sidebar, footer) MUST float over the map using absolute/fixed positioning with glassmorphism (`bg-black/60 backdrop-blur-xl border border-white/10`).",
+    "Implement the left sidebar for KPIs and Event Queue, and the right sidebar for Event Details and Layer toggles.",
+    "Use strict color coding for event severity (red for accidents, amber for construction, purple for congestion, orange for danger).",
+    "Use `IBM Plex Mono` for all metric values, numbers, and coordinates.",
+    "Add a pulsing 'LIVE' indicator in the header to emphasize real-time data connection.",
+    "Implement the footer as a dense status bar showing the health of the 3 data sources (DGT 3.0, SCT, OSM).",
+    "Do NOT use pure black or pure white everywhere; rely on `#0A0A0A` for base and `#FFFFFF` for primary text.",
+    "Add a 'Measure' (Ruler) tool toggle button in the map controls.",
+    "Ensure the UI feels like Palantir Foundry or Mapbox Studio: technical, data-dense, and highly operational."
+  ]
+}
