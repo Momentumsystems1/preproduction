@@ -1,73 +1,70 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-export const API = `${BACKEND_URL}/api`;
+const API = axios.create({
+  baseURL: process.env.REACT_APP_API_BASE_URL || "http://localhost:3001",
+  timeout: 10000,
+});
 
-export const api = axios.create({ baseURL: API, timeout: 30000 });
-
-export const fetchEvents = (city, lat, lon, radius_km = 150) =>
-  api.get("/events", { params: { city, lat, lon, radius_km } }).then((r) => r.data);
-
-export const fetchParking = (lat, lon, radius = 1500) =>
-  api.get("/parking", { params: { lat, lon, radius } }).then((r) => r.data);
-
-export const fetchCities = () => api.get("/cities").then((r) => r.data);
-
-export const fetchHealth = () => api.get("/health").then((r) => r.data);
-
-export const geocode = (q) => api.get("/geocode", { params: { q } }).then((r) => r.data);
-
-export const fetchRoute = (from_q, to_q, mode = "car") =>
-  api.get("/route", { params: { from: from_q, to: to_q, mode } }).then((r) => r.data);
-
-// ----- Azure Maps proxy endpoints -----
-export const azureStatus = () => api.get("/azure/status").then((r) => r.data);
-
-export const azureRoute = (from_q, to_q, mode = "car", traffic = true, extra = {}) =>
-  api.get("/azure/route", {
-    params: { from: from_q, to: to_q, mode, traffic, ...extra },
-  }).then((r) => r.data);
-
-export const azureRange = (lat, lon, minutes = 15, mode = "car") =>
-  api.get("/azure/range", { params: { lat, lon, minutes, mode } }).then((r) => r.data);
-
-export const azureSearchEV = (lat, lon, radius = 10000, limit = 50, connector = undefined) =>
-  api.get("/azure/search/ev", { params: { lat, lon, radius, limit, connector } }).then((r) => r.data);
-
-export const azureSearchPOI = (q, lat, lon, radius = 5000, limit = 30) =>
-  api.get("/azure/search/poi", { params: { q, lat, lon, radius, limit } }).then((r) => r.data);
-
-export const azureIncidents = (bbox, zoom = 11) =>
-  api.get("/azure/incidents", { params: { bbox, zoom } }).then((r) => r.data);
-
-export const azureWeatherCurrent = (lat, lon) =>
-  api.get("/azure/weather/current", { params: { lat, lon } }).then((r) => r.data);
-
-export const azureWeatherAlerts = (lat, lon) =>
-  api.get("/azure/weather/alerts", { params: { lat, lon } }).then((r) => r.data);
-
-// Returns absolute URL for Azure tile proxy (used by MapLibre tile sources)
-export const azureTileUrl = (kind) => {
-  const base = `${BACKEND_URL}/api/azure/tile/${kind}`;
-  return `${base}/{z}/{x}/{y}`;
+// Events (traffic incidents, works, congestion, etc.)
+export const fetchEvents = async (cityId) => {
+  const { data } = await API.get(`/events/${cityId}`);
+  return data;
 };
 
-// ----- Mobility hub (CityBikes GBFS aggregator + ride-hailing deep-links) -----
-export const fetchMobilityStations = (lat, lon, radius_km = 3.0, country = "ES") =>
-  api.get("/mobility/stations", { params: { lat, lon, radius_km, country } }).then((r) => r.data);
+// Health check for data sources
+export const fetchHealth = async () => {
+  const { data } = await API.get("/health");
+  return data;
+};
 
-export const fetchRideDeeplinks = (from_lat, from_lon, to_lat, to_lon) =>
-  api.get("/mobility/ride/deeplinks", {
-    params: { from_lat, from_lon, to_lat, to_lon },
-  }).then((r) => r.data);
+// Parking availability (OSM Overpass)
+export const fetchParking = async (lat, lng, radius) => {
+  const { data } = await API.get("/parking", { params: { lat, lng, radius } });
+  return data;
+};
 
-export const fetchUberEstimates = (start_lat, start_lon, end_lat, end_lon) =>
-  api.get("/uber/estimates", { params: { start_lat, start_lon, end_lat, end_lon } }).then((r) => r.data);
+// Cities list
+export const fetchCities = async () => {
+  const { data } = await API.get("/cities");
+  return data;
+};
 
-export const fetchUberStatus = () => api.get("/uber/status").then((r) => r.data);
+// Geocoding (address to coords)
+export const geocode = async (query) => {
+  const { data } = await API.get("/geocode", { params: { q: query } });
+  return data;
+};
 
-// ----- Multimodal trip planner -----
-export const fetchMultimodalPlan = (from_lat, from_lon, to_lat, to_lon) =>
-  api.get("/multimodal/plan", {
-    params: { from_lat, from_lon, to_lat, to_lon },
-  }).then((r) => r.data);
+// Route optimization (OSRM)
+export const fetchRoute = async (from, to, mode = "car") => {
+  const { data } = await API.get("/route", { params: { from, to, mode } });
+  return data;
+};
+
+// Azure tile URL generator
+export const azureTileUrl = (kind) => {
+  const key = process.env.REACT_APP_AZURE_MAPS_KEY;
+  const tileset = {
+    flow: "Microsoft.Maps.trafficFlow",
+    incident: "Microsoft.Maps.trafficIncident",
+    weather: "Microsoft.Maps.weather",
+    satellite: "Microsoft.Maps.satellite"
+  }[kind] || "Microsoft.Maps.trafficFlow";
+  return `https://atlas.microsoft.com/map/tile/png?api-version=2&tileset=${tileset}&zoom={z}&x={x}&y={y}&subscription-key=${key}`;
+};
+
+// Mobility stations (bike-share, scooters)
+export const fetchMobilityStations = async (lat, lng, radius) => {
+  const { data } = await API.get("/mobility", { params: { lat, lng, radius } });
+  return data;
+};
+
+// Multimodal route planning
+export const fetchMultimodalPlan = async (fromLat, fromLon, toLat, toLon) => {
+  const { data } = await API.get("/multimodal", {
+    params: { from_lat: fromLat, from_lon: fromLon, to_lat: toLat, to_lon: toLon }
+  });
+  return data;
+};
+
+export default API;

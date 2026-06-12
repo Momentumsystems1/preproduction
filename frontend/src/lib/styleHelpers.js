@@ -1,54 +1,24 @@
-/**
- * Small helpers to make conditional className composition readable
- * (kills nested ternaries which the linter and humans both hate).
- */
+// Risk color mapping
+export const riskColor = (risk) => {
+  if (!risk) return "text-cyan-200";
+  const level = String(risk).toLowerCase();
+  if (level.includes("critical") || level.includes("alto")) return "text-red-400";
+  if (level.includes("warning") || level.includes("medio")) return "text-amber-400";
+  if (level.includes("info") || level.includes("bajo")) return "text-cyan-300";
+  return "text-cyan-200";
+};
 
-/**
- * Map a value to a className using a lookup table with optional fallback.
- *   cls(severity, { critical: "text-red-400", warning: "text-amber-400" }, "text-emerald-400")
- */
-export function cls(value, map, fallback = "") {
-  return map[value] || fallback;
-}
-
-/**
- * Risk → tailwind text color (used in KPIs and HUD).
- */
-export function riskColor(risk) {
-  return cls(risk, {
-    ALTO: "text-red-400",
-    MEDIO: "text-amber-400",
-    BAJO: "text-emerald-400",
-  }, "text-zinc-300");
-}
-
-/**
- * Severity → CSS color variable.
- */
-export function severityColor(severity) {
-  return cls(severity, {
-    critical: "var(--accidente)",
-    warning: "var(--obras)",
-    info: "var(--cyan)",
-  }, "var(--cyan)");
-}
-
-/**
- * Health status → tailwind background color for a status dot.
- */
-export function statusBg(status) {
-  return cls(status, {
-    OK: "bg-emerald-400",
-    DOWN: "bg-red-500",
-  }, "bg-cyan-700");
-}
-
-/**
- * Log level → text color for the diagnostic stream.
- */
-export function logColor(kind) {
-  return cls(kind, {
-    err: "text-red-400",
-    ok: "text-emerald-400",
-  }, "text-cyan-300");
-}
+// Severity to color
+export const severityColor = (sev) => {
+  if (!sev) return "#67e8f9";
+  switch (String(sev).toLowerCase()) {
+    case "critical":
+      return "#ef4444";
+    case "warning":
+      return "#f59e0b";
+    case "info":
+      return "#3b82f6";
+    default:
+      return "#67e8f9";
+  }
+};

@@ -1,132 +1,114 @@
-/**
- * Small reusable HUD UI primitives extracted from CommandCenter.jsx.
- * Pure presentational components — no business logic.
- */
 import React from "react";
-import { Radio } from "lucide-react";
-import { KIND_ICON, KIND_LABEL, SEV_COLOR, pad } from "@/lib/hudConstants";
-import { statusBg } from "@/lib/styleHelpers";
+import { AlertCircle, CheckCircle, AlertTriangle } from "lucide-react";
+import { KIND_ICON, KIND_LABEL, SEV_COLOR } from "@/lib/hudConstants";
 
-export function KPI({ label, value, accent = "text-cyan-100", small = false, last = false }) {
-  return (
-    <div className={`px-3 py-2 border-b border-cyan-500/15 ${!last ? "border-r" : ""}`}>
-      <div className="font-mono text-[8px] tracking-[0.25em] text-cyan-500/80 mb-0.5">{label}</div>
-      <div className={`font-mono ${small ? "text-sm" : "text-xl"} font-semibold tabular-nums ${accent}`}>{value}</div>
+// KPI Card
+export const KPI = ({ label, value, accent = "text-cyan-100", small = false, last = false }) => (
+  <div
+    className={`px-3 py-2 border-r border-b border-cyan-500/15 ${last ? "border-b-0" : ""}`}
+  >
+    <div className={`font-mono ${small ? "text-[8px]" : "text-[9px]"} tracking-[0.22em] text-cyan-500/80 mb-1`}>
+      {label}
     </div>
-  );
-}
+    <div className={`font-mono ${small ? "text-lg" : "text-2xl"} ${accent} tabular-nums`}>
+      {value}
+    </div>
+  </div>
+);
 
-export function EventRow({ f, idx, active, onClick }) {
-  const Icon = KIND_ICON[f.kind] || Radio;
-  const color = SEV_COLOR[f.severity] || "var(--cyan)";
+// Event Row in queue
+export const EventRow = ({ f, idx, active, onClick }) => {
+  const Icon = KIND_ICON[f.kind] || AlertCircle;
+  const severityColor = SEV_COLOR[f.severity] || "#67e8f9";
+
   return (
-    <button
-      data-testid={`event-row-${f.id}`}
+    <div
       onClick={onClick}
-      className={`w-full text-left flex items-center gap-2 px-2 py-1.5 border-b border-cyan-500/8 atlantis-row ${active ? "bg-cyan-500/15" : ""}`}
-      style={{ borderLeft: `2px solid ${color}` }}
+      className={`px-3 py-2 border-l-2 cursor-pointer transition-colors ${
+        active ? "bg-cyan-500/15" : "hover:bg-cyan-500/8"
+      }`}
+      style={{ borderLeftColor: severityColor }}
+      data-testid={`event-row-${f.id}`}
     >
-      <span className="font-mono text-[10px] text-cyan-700 tabular-nums w-7 text-right">{pad(idx + 1, 3)}</span>
-      <Icon className="w-3 h-3 flex-shrink-0" style={{ color }} />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between gap-2">
-          <span className="font-mono text-[11px] font-semibold tracking-wide text-cyan-100">{KIND_LABEL[f.kind] || "INCIDENCIA"}</span>
-          <span className="font-mono text-[9px] text-cyan-600">{(f.source || "").split(" ")[0]}</span>
+      <div className="flex items-start gap-2">
+        <Icon className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" style={{ color: severityColor }} />
+        <div className="flex-1 min-w-0">
+          <div className="font-mono text-[10px] font-bold text-cyan-100 truncate">{f.kind.toUpperCase()}</div>
+          <div className="font-mono text-[9px] text-cyan-400/70 truncate">{f.title || f.road}</div>
+          <div className="font-mono text-[8px] text-cyan-600/60 truncate">{f.lat.toFixed(4)}, {f.lon.toFixed(4)}</div>
         </div>
-        <div className="font-mono text-[10px] text-cyan-300/80 truncate">{f.road || f.id}</div>
       </div>
-    </button>
+    </div>
   );
-}
+};
 
-export function EventDetail({ f, onClose }) {
-  const Icon = KIND_ICON[f.kind] || Radio;
-  const color = SEV_COLOR[f.severity] || "var(--cyan)";
+// Event Detail panel
+export const EventDetail = ({ f, onClose }) => {
+  const Icon = KIND_ICON[f.kind] || AlertCircle;
+
   return (
-    <div className="anim-fade-up" data-testid="event-detail">
-      <div className="px-3 py-3 border-b border-cyan-500/15">
-        <div className="flex items-start gap-3">
-          <div className="w-10 h-10 flex items-center justify-center border" style={{ borderColor: color, background: `${color}1A` }}>
-            <Icon className="w-5 h-5" style={{ color }} />
+    <div className="p-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Icon className="w-4 h-4" />
+          <div className="font-mono text-[11px] font-bold text-cyan-100">{f.kind.toUpperCase()}</div>
+        </div>
+        <button onClick={onClose} className="text-cyan-400 hover:text-cyan-100 text-xs">✕</button>
+      </div>
+      <div className="border-t border-cyan-500/15 pt-3">
+        <div className="font-mono text-[9px] text-cyan-500/70 mb-1">TITLE</div>
+        <div className="font-mono text-[10px] text-cyan-100">{f.title}</div>
+      </div>
+      <div>
+        <div className="font-mono text-[9px] text-cyan-500/70 mb-1">DESCRIPTION</div>
+        <div className="font-mono text-[9px] text-cyan-400/80 line-clamp-3">{f.description}</div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <div className="font-mono text-[8px] text-cyan-500/70">SEVERITY</div>
+          <div className="font-mono text-[10px] font-bold" style={{ color: SEV_COLOR[f.severity] || "#67e8f9" }}>
+            {f.severity?.toUpperCase() || "INFO"}
           </div>
-          <div className="flex-1">
-            <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80">REC · {f.id}</div>
-            <div className="font-display font-semibold text-base text-cyan-100 mt-0.5 tracking-wide">{KIND_LABEL[f.kind] || f.title}</div>
-            <div className="font-mono text-[10px] text-cyan-400 tracking-wider mt-0.5">{f.source}</div>
-          </div>
+        </div>
+        <div>
+          <div className="font-mono text-[8px] text-cyan-500/70">SOURCE</div>
+          <div className="font-mono text-[9px] text-cyan-200">{f.source || "OSM"}</div>
         </div>
       </div>
-
-      <div className="px-3 py-2 space-y-2 border-b border-cyan-500/15">
-        {f.road && <Field label="VECTOR / ROAD">{f.road}</Field>}
-        <Field label="ANALYSIS">{f.description}</Field>
-        <div className="grid grid-cols-2 gap-2">
-          <Field label="LATITUDE" mono>{f.lat?.toFixed(5)}</Field>
-          <Field label="LONGITUDE" mono>{f.lon?.toFixed(5)}</Field>
-        </div>
-        <Field label="SEVERITY">
-          <span className="px-2 py-0.5 text-[10px] font-mono tracking-[0.18em]"
-                style={{ background: `${color}1F`, color, border: `1px solid ${color}80` }}>
-            {(f.severity || "info").toUpperCase()}
-          </span>
-        </Field>
-      </div>
-
-      <div className="px-3 py-2 grid grid-cols-2 gap-2">
-        <a data-testid="event-gmaps" target="_blank" rel="noreferrer"
-           href={`https://www.google.com/maps/dir/?api=1&destination=${f.lat},${f.lon}`}
-           className="text-center px-2 py-1.5 bg-cyan-500/10 border border-cyan-500/40 hover:bg-cyan-500/20 text-[10px] font-mono tracking-wider text-cyan-100">
-          ROUTE TO TARGET
-        </a>
-        <button data-testid="event-close" onClick={onClose}
-          className="px-2 py-1.5 bg-transparent border border-cyan-500/40 hover:bg-cyan-500/10 text-[10px] font-mono tracking-wider text-cyan-100">
-          DISENGAGE
-        </button>
-      </div>
     </div>
   );
-}
+};
 
-export function Field({ label, children, mono = false }) {
+// Status Pill
+export const StatusPill = ({ name, status }) => {
+  let icon = CheckCircle;
+  let color = "text-emerald-400";
+
+  if (status === "ERROR" || status === "OFFLINE") {
+    icon = AlertTriangle;
+    color = "text-red-400";
+  } else if (status === "DEGRADED") {
+    icon = AlertTriangle;
+    color = "text-amber-400";
+  }
+
+  const Icon = icon;
   return (
-    <div>
-      <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 mb-0.5">{label}</div>
-      <div className={mono ? "font-mono text-[12px] text-cyan-100" : "text-[12px] text-cyan-100/90 leading-snug"}>{children}</div>
+    <div className="flex items-center gap-1">
+      <Icon className={`w-3 h-3 ${color}`} />
+      <span className="font-mono text-[9px] text-cyan-300">{name}</span>
     </div>
   );
-}
+};
 
-export function Tel({ label, value, accent = false }) {
+// Source Badge
+export const SourceBadge = ({ name, status }) => {
+  const isOK = status === "OK" || status === "ACTIVE";
   return (
-    <div className="flex items-center justify-between border-b border-cyan-500/10 pb-1">
-      <span className="text-cyan-500/80 tracking-wider">{label}</span>
-      <span className={`tabular-nums ${accent ? "text-cyan-300" : "text-cyan-100"}`}>{value || "—"}</span>
+    <div className={`px-2 py-1.5 mb-1.5 border rounded text-[9px] font-mono ${
+      isOK ? "border-emerald-500/40 bg-emerald-500/5 text-emerald-300" : "border-amber-500/40 bg-amber-500/5 text-amber-300"
+    }`}>
+      <span className={isOK ? "text-emerald-400" : "text-amber-400"}>●</span> {name}: {status || "UNKNOWN"}
     </div>
   );
-}
-
-export function StatusPill({ name, status }) {
-  const ok = status === "OK";
-  const textColor = ok ? "text-emerald-400" : status === "DOWN" ? "text-red-400" : "text-cyan-700";
-  return (
-    <div className="flex items-center gap-1.5" data-testid={`status-${name.toLowerCase().replace(/\s/g, "-").replace(".", "-")}`}>
-      <div className={`w-1.5 h-1.5 ${statusBg(status)}`} />
-      <span className="text-cyan-400/80">{name}</span>
-      <span className={textColor}>{status || "—"}</span>
-    </div>
-  );
-}
-
-export function SourceBadge({ name, status }) {
-  const ok = status === "OK";
-  const textColor = ok ? "text-emerald-400" : status === "DOWN" ? "text-red-400" : "text-cyan-700";
-  return (
-    <div className="flex items-center justify-between py-1 border-b border-cyan-500/10 last:border-0">
-      <span className="font-mono text-[10px] tracking-wider text-cyan-200">{name}</span>
-      <div className="flex items-center gap-1.5">
-        <div className={`w-1.5 h-1.5 ${statusBg(status)}`} />
-        <span className={`font-mono text-[9px] tracking-wider ${textColor}`}>{status || "—"}</span>
-      </div>
-    </div>
-  );
-}
+};
