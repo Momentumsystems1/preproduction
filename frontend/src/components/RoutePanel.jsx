@@ -37,15 +37,16 @@ function SegmentRow({ seg }) {
   );
 }
 
+function getDeltaText(deltaMin) {
+  if (deltaMin == null) return null;
+  if (deltaMin > 0) return `−${deltaMin}min vs coche`;
+  if (deltaMin < 0) return `+${Math.abs(deltaMin)}min vs coche`;
+  return "igual vs coche";
+}
+
 function MultimodalCard({ opt, idx, onPick }) {
   const isBest = opt.best;
-  const deltaTxt = opt.delta_vs_car_min != null
-    ? (opt.delta_vs_car_min > 0
-        ? `−${opt.delta_vs_car_min}min vs coche`
-        : (opt.delta_vs_car_min < 0
-            ? `+${Math.abs(opt.delta_vs_car_min)}min vs coche`
-            : "igual vs coche"))
-    : null;
+  const deltaTxt = getDeltaText(opt.delta_vs_car_min);
 
   return (
     <button
@@ -78,7 +79,7 @@ function MultimodalCard({ opt, idx, onPick }) {
         {opt.description}
       </div>
       <div className="border-t border-cyan-500/15 pt-1.5 space-y-0.5">
-        {opt.segments.map((s, i) => <SegmentRow key={i} seg={s} />)}
+        {opt.segments.map((s, i) => <SegmentRow key={`${s.mode}-${s.label}-${i}`} seg={s} />)}
       </div>
     </button>
   );
@@ -206,7 +207,7 @@ export default function RoutePanel({
             {multimodalData && multimodalData.options && multimodalData.options.length > 0 && (
               <div className="space-y-1.5" data-testid="multimodal-options">
                 {multimodalData.options.map((o, i) => (
-                  <MultimodalCard key={i} idx={i} opt={o} onPick={onPickMultimodal} />
+                  <MultimodalCard key={o.label || `opt-${i}`} idx={i} opt={o} onPick={onPickMultimodal} />
                 ))}
               </div>
             )}

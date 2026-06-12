@@ -13,7 +13,6 @@ import time
 import math
 import logging
 import asyncio
-import asyncio
 import html
 import httpx
 from pathlib import Path
@@ -262,8 +261,7 @@ async def fetch_parking(lat: float, lon: float, radius: int = 1500) -> Dict[str,
         f'relation(around:{radius},{lat},{lon})["amenity"="parking"];'
         f");out center 80;"
     )
-    body = "data=" + httpx.QueryParams({"data": q}).get("data", "")
-    # Easier: use raw form
+    # Use raw form-encoded body for Overpass
     try:
         async with httpx.AsyncClient(timeout=18) as c:
             r = await c.post(OVERPASS_URL, data={"data": q}, headers={"User-Agent": UA})
@@ -1284,12 +1282,23 @@ async def multimodal_plan(
 ):
     """Compute 4 multimodal trip combinations and rank by fastest."""
 
-    # OPTION A: 100% car direct (with live traffic)
-    car_direct = await _azure_route_simple(from_lat, from_lon, to_lat, to_lon, "car", True)
-
-    # Find parking near destination for park-and-walk / park-and-bus combos
-    parkings = await _find_parking_near(to_lat, to_lon, 1500)
+    # Fire the two independent Azure calls in parallel:
+    #   1) direct car route (origin → destination)
+    #   2) parkings near destination
+    car_direct, parkings = await asyncio.gather(
+        _azure_route_simple(from_lat, from_lon, to_lat, to_lon, "car", True),
+        _find_parking_near(to_lat, to_lon, 1500),
+    )
     best_parking = parkings[0] if parkings else None
+
+    # If we have a parking candidate, the two parking legs are also independent.
+    leg_car: Optional[Dict[str, Any]] = None
+    leg_walk: Optional[Dict[str, Any]] = None
+    if best_parking:
+        leg_car, leg_walk = await asyncio.gather(
+            _azure_route_simple(from_lat, from_lon, best_parking["lat"], best_parking["lon"], "car", True),
+            _azure_route_simple(best_parking["lat"], best_parking["lon"], to_lat, to_lon, "foot", False),
+        )
 
     options: List[Dict[str, Any]] = []
 
@@ -1307,43 +1316,40 @@ async def multimodal_plan(
             "#fbbf24" if delay_min > 5 else "#22d3ee",
         ))
 
-    if best_parking:
+    if best_parking and leg_car and leg_walk:
         # OPTION B: car to parking + walk
-        leg_car = await _azure_route_simple(from_lat, from_lon, best_parking["lat"], best_parking["lon"], "car", True)
-        leg_walk = await _azure_route_simple(best_parking["lat"], best_parking["lon"], to_lat, to_lon, "foot", False)
-        if leg_car and leg_walk:
-            options.append(_format_option(
-                "🚗→🚶 COCHE + PARKING + ANDAR",
-                [
-                    {"mode": "car", "duration_min": leg_car["duration_min"], "distance_m": leg_car["distance_m"],
-                     "label": f"Conducir a {best_parking['name']}", "to": [best_parking["lon"], best_parking["lat"]]},
-                    {"mode": "foot", "duration_min": leg_walk["duration_min"], "distance_m": leg_walk["distance_m"],
-                     "label": f"Andar {leg_walk['distance_m']}m hasta el destino",
-                     "from": [best_parking["lon"], best_parking["lat"]], "to": [to_lon, to_lat]},
-                ], "🚗🚶",
-                f"Aparcas en {best_parking['name']} y caminas {leg_walk['distance_m']}m. "
-                f"Evitas atascos en el último tramo.",
-                "#22d3ee",
-            ))
+        options.append(_format_option(
+            "🚗→🚶 COCHE + PARKING + ANDAR",
+            [
+                {"mode": "car", "duration_min": leg_car["duration_min"], "distance_m": leg_car["distance_m"],
+                 "label": f"Conducir a {best_parking['name']}", "to": [best_parking["lon"], best_parking["lat"]]},
+                {"mode": "foot", "duration_min": leg_walk["duration_min"], "distance_m": leg_walk["distance_m"],
+                 "label": f"Andar {leg_walk['distance_m']}m hasta el destino",
+                 "from": [best_parking["lon"], best_parking["lat"]], "to": [to_lon, to_lat]},
+            ], "🚗🚶",
+            f"Aparcas en {best_parking['name']} y caminas {leg_walk['distance_m']}m. "
+            f"Evitas atascos en el último tramo.",
+            "#22d3ee",
+        ))
 
+    if best_parking and leg_car:
         # OPTION C: car to parking + transit (deeplink only — Google Transit handles routing)
-        if leg_car:
-            transit_walk_min = round(leg_walk["duration_min"] * 0.6, 1) if leg_walk else 5
-            options.append(_format_option(
-                "🚗→🚌 COCHE + PARKING + TRANSPORTE",
-                [
-                    {"mode": "car", "duration_min": leg_car["duration_min"], "distance_m": leg_car["distance_m"],
-                     "label": f"Conducir a {best_parking['name']}",
-                     "to": [best_parking["lon"], best_parking["lat"]]},
-                    {"mode": "transit", "duration_min": transit_walk_min, "distance_m": 0,
-                     "label": "Bus/metro al destino (estimado)",
-                     "deeplink": f"https://www.google.com/maps/dir/?api=1&origin={best_parking['lat']},{best_parking['lon']}&destination={to_lat},{to_lon}&travelmode=transit",
-                     "from": [best_parking["lon"], best_parking["lat"]], "to": [to_lon, to_lat]},
-                ], "🚗🚌",
-                "Aparcas y coges transporte público para el último tramo. "
-                "Idea para evitar zonas restringidas / sin parking cerca del destino.",
-                "#c084fc",
-            ))
+        transit_walk_min = round(leg_walk["duration_min"] * 0.6, 1) if leg_walk else 5
+        options.append(_format_option(
+            "🚗→🚌 COCHE + PARKING + TRANSPORTE",
+            [
+                {"mode": "car", "duration_min": leg_car["duration_min"], "distance_m": leg_car["distance_m"],
+                 "label": f"Conducir a {best_parking['name']}",
+                 "to": [best_parking["lon"], best_parking["lat"]]},
+                {"mode": "transit", "duration_min": transit_walk_min, "distance_m": 0,
+                 "label": "Bus/metro al destino (estimado)",
+                 "deeplink": f"https://www.google.com/maps/dir/?api=1&origin={best_parking['lat']},{best_parking['lon']}&destination={to_lat},{to_lon}&travelmode=transit",
+                 "from": [best_parking["lon"], best_parking["lat"]], "to": [to_lon, to_lat]},
+            ], "🚗🚌",
+            "Aparcas y coges transporte público para el último tramo. "
+            "Idea para evitar zonas restringidas / sin parking cerca del destino.",
+            "#c084fc",
+        ))
 
     # OPTION D: 100% transit (deeplink only)
     options.append(_format_option(
