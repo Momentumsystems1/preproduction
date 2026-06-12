@@ -223,7 +223,10 @@ body::before {
   font-size: 11px; font-weight: 700;
   cursor: pointer;
   position: relative;
-  transition: transform 150ms ease;
+  /* No transition on transform: MapLibre controls the translate() during zoom/pan.
+     Adding a transition causes the marker to visually lag behind the basemap. */
+  transition: filter 150ms ease;
+  will-change: filter;
 }
 .mrc-marker::before {
   content: "";
@@ -231,6 +234,8 @@ body::before {
   background: currentColor;
   clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
   opacity: 0.85;
+  transition: transform 150ms ease;
+  transform-origin: center center;
 }
 .mrc-marker::after {
   content: "";
@@ -242,8 +247,10 @@ body::before {
   position: relative; z-index: 2;
   color: #02101a;
   font-weight: 800;
+  pointer-events: none;
 }
-.mrc-marker:hover { transform: scale(1.18); filter: drop-shadow(0 0 8px currentColor); }
+.mrc-marker:hover { filter: drop-shadow(0 0 8px currentColor); }
+.mrc-marker:hover::before { transform: scale(1.18); }
 .mrc-marker.kind-accidente  { color: var(--accidente); }
 .mrc-marker.kind-obras      { color: var(--obras); }
 .mrc-marker.kind-congestion { color: var(--congestion); }
@@ -256,6 +263,7 @@ body::before {
 }
 .mrc-marker.parking::before { clip-path: none; border-radius: 2px; }
 .mrc-marker.parking::after  { clip-path: none; }
+.mrc-marker.parking:hover::before { transform: scale(1.15); }
 
 /* Popup */
 .mrc-popup .maplibregl-popup-content {
