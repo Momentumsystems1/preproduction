@@ -42,22 +42,21 @@ Refactor of an existing tool that connects to DATEX DGT 3.0 and Servei Català d
   - Diamond-shaped event markers, color-coded by kind, hover popup, click to select
   - Corner brackets, scanline overlay, radar sweep loading state, dotted measure line
 
-### Update 2026-06-12 (RADICAL UI REDESIGN — Radial Command)
-- **Old HUD hidden by default** (toggle with `H` key or "MODO EXPERTO" button).
-- **New `RadialCommand` component** (`/app/frontend/src/components/RadialCommand.jsx`) becomes the primary UI:
-  - Central draggable orb with **3 skins** (orb / crystal / minimal) cycled via palette button.
-  - **3 concentric rings × 6 slots = 18 actions**:
-    - OUTER (cyan): Tráfico · Parking · Bicis · EV · Clima · Transporte
-    - MIDDLE (amber): Coche · Bus · Bici · Andar · Patinete · Taxi
-    - INNER (violet): Origen · Destino · Calcular · Medir · Info · Reset
-  - Click a slot → rotates to 12 o'clock; **smart cross-ring links** auto-align the other two rings (e.g. "Tráfico" → Car + Calcular).
-  - Drag a ring to manually rotate; snaps to nearest slot on release.
-  - Control core can be **dragged anywhere on screen**, **minimized**, or **maximized**.
-  - Auto-collapses when pointer leaves a 280 px radius.
-- **Map-click → context-aware action**: when inner ring is on "Origen" / "Destino", clicking the map fixes those points (visualised as native GeoJSON markers).
-- **Drag control over a traffic incident** → context auto-bound to that feature (queryRenderedFeatures on `events-circle` layer).
-- **ENTRAR button** appears when context is set → fires `/api/multimodal/plan` and overlays the 4 ranked alternatives at the bottom of the screen.
-- Status chip top-left tracks live state: `LAYER · MODE · ACTION · ORG · DST`.
+### Update 2026-06-12 (Radial Command v2 — PLANETARY INTERFACE)
+**Complete redesign** based on user feedback. The control now behaves like a planetary system:
+- **Central "sun"** holds contextual text (default: "Control"). Hover over any planet → its label fills the center (no floating tooltips).
+- **3 orbits** with planets distributed evenly (6 slots, 60° apart).
+- **Mode planets** on the OUTER orbit (Navegador · Capas · Info · Cerca · Buscar · Yo).
+- **Click a mode planet** → the chosen planet rotates to 12 o'clock and stays bright; other outer planets dim (still clickable). Middle + inner orbits **repopulate** with mode-specific sub-actions.
+  - Navegador sub-planets: Puntos · Optimizar · Invertir · Historial · Limpiar · Volver. Inner orbit: transport modes (Coche, Bus, Bici, Andar, Patinete, Taxi).
+  - Capas sub-planets: toggle layers (Tráfico, Parking, Bicis, EV, Clima, Volver).
+  - Info, Cerca, Buscar, Yo each have their own 5-action sub-set + Volver.
+- **Crosshair mode**: clicking the "Puntos" planet morphs the central sun into a red crosshair reticle, hides all other orbits, and asks user to click the map. First click → INICIO fixed (sun updates to "DESTINO"). Second click → DESTINO fixed, control returns to navegador mode and the sun shows "LISTO · INI lat,lng → DST lat,lng".
+- **"Optimizar" planet** fires `/api/multimodal/plan` and renders 4 ranked alternatives (★ best) at the bottom of the screen.
+- **Customizable**: control is draggable; 3 skins (orb · crystal · minimal); minimize/maximize button; auto-collapses when pointer is > 290 px away.
+- **Backward compat**: pressing `H` or the "MODO EXPERTO" button toggles the full legacy HUD (top header, side panels, bottom dock).
+
+### Update 2026-06-12 (Radial Command v1) — superseded by v2
 
 ### Update 2026-06-12 (multimodal trip planner)
 - New endpoint **`/api/multimodal/plan`** ranks up to 4 trip combinations by fastest:

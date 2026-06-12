@@ -85,6 +85,7 @@ export default function CommandCenter() {
   const [contextFeature, setContextFeature] = useState(null);   // dropped-on incident
   const [radialMmod, setRadialMmod] = useState(null);
   const [radialMmodOpen, setRadialMmodOpen] = useState(false);
+  const [pickingMode, setPickingMode] = useState(false);        // when RadialCommand asks the user to click 2 map points
   const addLog = useCallback((msg, kind = "info") => {
     setLogs((l) => [{ id: Date.now() + Math.random(), msg, kind, t: new Date() }, ...l].slice(0, 24));
   }, []);
@@ -156,36 +157,32 @@ export default function CommandCenter() {
     else map.once("styledata", ready);
   }, [radialOrigin, radialDest, mapStyle, mapReady]);
 
-  // Map click → set origin / destination based on radial inner action
+  // Map click → set origin / destination based on radial picking mode
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    if (expertMode) return;                          // expert mode uses its own click flow
-    if (measureMode) return;                          // measure takes precedence
+    if (expertMode) return;
+    if (measureMode) return;
+    if (!pickingMode) return;
 
     const onClick = (e) => {
       const lngLat = [e.lngLat.lng, e.lngLat.lat];
-      if (radialSel.action === "origin") {
+      if (!radialOrigin) {
         setRadialOrigin(lngLat);
-        addLog(`[RADIAL] ORIGEN fijado · ${lngLat[1].toFixed(4)},${lngLat[0].toFixed(4)}`, "ok");
-      } else if (radialSel.action === "destination") {
+        addLog(`[RADIAL] INICIO fijado · ${lngLat[1].toFixed(4)},${lngLat[0].toFixed(4)}`, "ok");
+      } else if (!radialDest) {
         setRadialDest(lngLat);
         addLog(`[RADIAL] DESTINO fijado · ${lngLat[1].toFixed(4)},${lngLat[0].toFixed(4)}`, "ok");
-      } else if (radialSel.action === "info") {
-        // Show nearby feature info
-        const features = map.queryRenderedFeatures(e.point, { layers: ["events-circle"].filter((l) => map.getLayer(l)) });
-        if (features.length) {
-          const f = features[0];
-          setContextFeature({ id: f.properties?.id, label: f.properties?.kindLabel || "Punto", lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], severity: f.properties?.severity });
-          addLog(`[RADIAL] Info: ${f.properties?.kindLabel || "Punto"}`, "info");
-        } else {
-          setContextFeature(null);
-        }
+        setPickingMode(false);
       }
     };
     map.on("click", onClick);
-    return () => { map.off("click", onClick); };
-  }, [radialSel.action, expertMode, measureMode, addLog, mapReady]);
+    map.getCanvas().style.cursor = "crosshair";
+    return () => {
+      map.off("click", onClick);
+      if (map.getCanvas()) map.getCanvas().style.cursor = "";
+    };
+  }, [pickingMode, radialOrigin, radialDest, expertMode, measureMode, addLog, mapReady]);
 
   // Detect when the radial control is dropped over an incident → set as context
   const handleRadialDrop = useCallback((pt) => {
@@ -1517,10 +1514,37 @@ export default function CommandCenter() {
       <RadialCommand
         origin={radialOrigin}
         destination={radialDest}
-        contextFeature={contextFeature}
-        onSelectionChange={setRadialSel}
-        onConfirm={() => handleRadialConfirm()}
-        onPointerMoveOverMap={handleRadialDrop}
+        transportMode={radialSel.mode}
+        onTransportChange={(m) => setRadialSel((s) => ({ ...s, mode: m }))}
+        onStartPicking={() => { setRadialOrigin(null); setRadialDest(null); setPickingMode(true); addLog("[RADIAL] Modo crosshair · click en mapa", "info"); }}
+        onResetPoints={() => { setRadialOrigin(null); setRadialDest(null); setRadialMmod(null); setRadialMmodOpen(false); setPickingMode(false); }}
+        onReversePoints={() => { setRadialOrigin(radialDest); setRadialDest(radialOrigin); }}
+        onCompute={async () => {
+          if (!radialOrigin || !radialDest) { addLog("[RADIAL] Faltan inicio o destino", "err"); return; }
+          addLog("[RADIAL] Calculando ruta multimodal...", "info");
+          try {
+            const mm = await fetchMultimodalPlan(radialOrigin[1], radialOrigin[0], radialDest[1], radialDest[0]);
+            setRadialMmod(mm);
+            setRadialMmodOpen(true);
+            addLog(`[RADIAL] ${mm.options?.length || 0} opciones · mejor: ${mm.options?.[0]?.label}`, "ok");
+          } catch (e) { addLog(`[RADIAL] Multimodal falló: ${e.message}`, "err"); }
+        }}
+        onToggleLayer={(layer, on) => {
+          if (layer === "traffic") { setShowAzureFlow(on); setShowAzureIncidents(on); }
+          if (layer === "parking") setShowParking(on);
+          if (layer === "bikes")   setShowMobility(on);
+          if (layer === "weather") setShowAzureWeather(on);
+          if (layer === "ev")      setShowEVPanel(on);
+          addLog(`[CAPA] ${layer.toUpperCase()} ${on ? "ON" : "OFF"}`, "info");
+        }}
+        onPickInfo={() => addLog("[INFO] Función en preparación", "info")}
+        onSearchNearby={(category) => addLog(`[CERCA] Buscando ${category} (mock)`, "info")}
+        onLocateMe={() => locateMe()}
+        onOpenExpert={() => setExpertMode(true)}
+        onGeocoderOpen={() => setExpertMode(true)}
+        resultText={radialOrigin && radialDest
+          ? `INI ${radialOrigin[1].toFixed(3)},${radialOrigin[0].toFixed(3)} → DST ${radialDest[1].toFixed(3)},${radialDest[0].toFixed(3)}`
+          : null}
       />
 
       {/* Minimal status chip (visible in radial mode only) */}
