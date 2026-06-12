@@ -3,7 +3,7 @@ import maplibregl from "maplibre-gl";
 import {
   Radio, AlertTriangle, Construction, OctagonAlert, TrendingUp, Layers, Ruler,
   SquareParking, Search, RotateCw, Mountain, Satellite, Map as MapIcon,
-  Activity, Crosshair, ChevronRight, Power, CloudRain, Loader2, Eye, EyeOff, X,
+  Activity, Crosshair, Power, CloudRain, Loader2, Eye, X, ChevronRight, Hexagon,
 } from "lucide-react";
 
 import { STYLES } from "@/lib/mapStyles";
@@ -18,36 +18,30 @@ const KIND_ICON = {
   incidencia: Radio,
 };
 
-const KIND_GLYPH = {
-  obras: "!",
-  accidente: "X",
-  congestion: "≋",
-  peligro: "▲",
-  meteo: "~",
-  incidencia: "i",
-};
+const KIND_GLYPH = { obras: "!", accidente: "X", congestion: "≋", peligro: "▲", meteo: "~", incidencia: "i" };
+const KIND_LABEL = { obras: "OBRAS", accidente: "ACCIDENTE", congestion: "CONGESTIÓN", peligro: "PELIGRO", meteo: "METEO", incidencia: "INCIDENCIA" };
+const SEV_COLOR = { critical: "var(--accidente)", warning: "var(--obras)", info: "var(--cyan)" };
 
-const KIND_LABEL = {
-  obras: "Obras",
-  accidente: "Accidente",
-  congestion: "Congestión",
-  peligro: "Peligro",
-  meteo: "Meteo",
-  incidencia: "Incidencia",
-};
+const SUBROUTINES = [
+  ["GTF-001", "DATEX2 STREAM",        "ACTIVE"],
+  ["GTF-002", "SCT FEED",             "ACTIVE"],
+  ["GTF-003", "MADRID KML",           "ACTIVE"],
+  ["GTF-004", "OSM OVERPASS",         "STANDBY"],
+  ["GTF-005", "NOMINATIM GEOCODE",    "STANDBY"],
+  ["GTF-006", "MAPTILE RASTER",       "ACTIVE"],
+  ["GTF-007", "TERRAIN RGB",          "STANDBY"],
+  ["GTF-008", "EVENT CLASSIFIER",     "ACTIVE"],
+  ["GTF-009", "SEVERITY MATRIX",      "ACTIVE"],
+  ["GTF-010", "GEOSPATIAL FILTER",    "ACTIVE"],
+  ["GTF-011", "PARKING AGGREGATOR",   "STANDBY"],
+  ["GTF-012", "ROUTE OPTIMIZER",      "OFFLINE"],
+];
 
-const SEV_COLOR = {
-  critical: "#ef4444",
-  warning: "#f59e0b",
-  info: "#3b82f6",
-};
-
-function formatTime(iso) {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  } catch { return "--:--"; }
+function fmtTime(d) {
+  if (!d) return "--:--:--";
+  return d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
+function pad(n, w = 4) { return String(n).padStart(w, "0"); }
 
 export default function CommandCenter() {
   const mapRef = useRef(null);
@@ -58,7 +52,6 @@ export default function CommandCenter() {
   const measureMarkersRef = useRef([]);
   const measureLineSourceIdRef = useRef("measure-line");
   const hoverPopupRef = useRef(null);
-  const cursorMeasureRef = useRef(null);
 
   const [mapStyle, setMapStyle] = useState("normal");
   const [city, setCity] = useState("madrid");
@@ -75,10 +68,24 @@ export default function CommandCenter() {
   const [showParking, setShowParking] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterKind, setFilterKind] = useState("all");
-  const [leftOpen, setLeftOpen] = useState(true);
-  const [rightOpen, setRightOpen] = useState(true);
   const [pitch, setPitch] = useState(0);
+  const [zoom, setZoom] = useState(11);
+  const [bearing, setBearing] = useState(0);
+  const [mapCenter, setMapCenter] = useState({ lat: 40.41678, lng: -3.70379 });
   const [lastUpdate, setLastUpdate] = useState(null);
+  const [clock, setClock] = useState(new Date());
+
+  // diagnostic stream log
+  const [logs, setLogs] = useState([]);
+  const addLog = useCallback((msg, kind = "info") => {
+    setLogs((l) => [{ id: Date.now() + Math.random(), msg, kind, t: new Date() }, ...l].slice(0, 24));
+  }, []);
+
+  // clock
+  useEffect(() => {
+    const t = setInterval(() => setClock(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   // ---- init map ----
   useEffect(() => {
@@ -97,12 +104,21 @@ export default function CommandCenter() {
     map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
 
     map.on("pitch", () => setPitch(Math.round(map.getPitch())));
+    map.on("zoom", () => setZoom(map.getZoom().toFixed(2)));
+    map.on("rotate", () => setBearing(Math.round(map.getBearing())));
+    map.on("move", () => {
+      const c = map.getCenter();
+      setMapCenter({ lat: c.lat, lng: c.lng });
+    });
+
+    addLog("[CORE] Map subsystem initialized", "ok");
+    addLog("[NET ] Connecting to DGT 3.0 DATEX2 stream...", "info");
 
     return () => { map.remove(); mapRef.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- change style ----
+  // ---- style change ----
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -113,57 +129,60 @@ export default function CommandCenter() {
         try {
           map.setTerrain({ source: "terrain-rgb", exaggeration: 1.4 });
           map.easeTo({ pitch: 60, bearing: -17, duration: 1200 });
-        } catch (e) { /* terrain unavailable in this style */ }
+        } catch (e) { /* terrain unavailable */ }
       } else {
-        try { map.setTerrain(null); } catch (e) { /* no terrain to remove */ }
+        try { map.setTerrain(null); } catch (e) { /* no terrain */ }
         map.easeTo({ pitch: 0, bearing: 0, duration: 800 });
       }
-      // re-render markers after style change
       renderEventMarkers(eventsData);
       renderParkingMarkers(parkingData);
     });
+    addLog(`[VIEW] Switching render mode → ${mapStyle.toUpperCase()}`, "info");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapStyle]);
 
-  // ---- load cities ----
+  // ---- load cities + health ----
   useEffect(() => {
     fetchCities().then(setCities).catch(() => {});
-    fetchHealth().then(setHealthData).catch(() => {});
-    const t = setInterval(() => fetchHealth().then(setHealthData).catch(() => {}), 60000);
+    const refreshHealth = () => fetchHealth().then((h) => {
+      setHealthData(h);
+      addLog(`[NET ] Source diagnostic completed: DGT=${h.sources?.["DGT 3.0"]} SCT=${h.sources?.SCT} MAD=${h.sources?.Madrid}`, "ok");
+    }).catch(() => addLog("[NET ] Health check failed", "err"));
+    refreshHealth();
+    const t = setInterval(refreshHealth, 60000);
     return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- load events when city changes + auto refresh ----
+  // ---- load events ----
   const loadEvents = useCallback(async (cityId) => {
     setLoading(true);
+    addLog(`[NET ] Querying DGT 3.0 for sector ${cityId.toUpperCase()}...`, "info");
     try {
       const data = await fetchEvents(cityId);
       setEventsData(data);
       setLastUpdate(new Date());
-      // center map
+      addLog(`[DATA] Ingested ${data.count} situation records · risk=${data.risk}`, "ok");
+      addLog(`[CLS ] Severity matrix: CRIT=${data.severity.critical} WARN=${data.severity.warning} INFO=${data.severity.info}`, "ok");
       if (mapRef.current && data.center) {
-        mapRef.current.easeTo({
-          center: [data.center.lon, data.center.lat],
-          zoom: 11.5,
-          duration: 1000,
-        });
+        mapRef.current.easeTo({ center: [data.center.lon, data.center.lat], zoom: 11.5, duration: 1000 });
       }
     } catch (e) {
-      console.error("Events load error", e);
+      addLog(`[ERR ] Failed to fetch events: ${e.message}`, "err");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [addLog]);
 
   useEffect(() => { loadEvents(city); }, [city, loadEvents]);
 
-  // auto refresh every 90s
+  // auto refresh
   useEffect(() => {
     const t = setInterval(() => loadEvents(city), 90_000);
     return () => clearInterval(t);
   }, [city, loadEvents]);
 
-  // ---- render event markers ----
+  // ---- markers ----
   const filteredFeatures = useMemo(() => {
     if (!eventsData) return [];
     if (filterKind === "all") return eventsData.features;
@@ -185,26 +204,28 @@ export default function CommandCenter() {
       el.addEventListener("click", (ev) => {
         ev.stopPropagation();
         setSelected(f);
+        addLog(`[SEL ] Target acquired ${f.id} (${(f.kind || "incidencia").toUpperCase()})`, "info");
         map.easeTo({ center: [f.lon, f.lat], zoom: Math.max(map.getZoom(), 13), duration: 600 });
       });
       el.addEventListener("mouseenter", () => {
         if (hoverPopupRef.current) hoverPopupRef.current.remove();
         hoverPopupRef.current = new maplibregl.Popup({ closeButton: false, className: "mrc-popup", offset: 18 })
           .setLngLat([f.lon, f.lat])
-          .setHTML(`<div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#06b6d4;text-transform:uppercase;letter-spacing:0.08em;">${f.source}</div>
-                    <div style="font-weight:600;font-size:13px;margin-top:2px">${KIND_LABEL[f.kind] || "Incidencia"}</div>
-                    <div style="color:#a1a1aa;font-size:12px;margin-top:2px">${f.road || ""}</div>`)
+          .setHTML(`<div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--cyan,#22d3ee);text-transform:uppercase;letter-spacing:0.18em;">▸ ${f.source}</div>
+                    <div style="font-weight:600;font-size:13px;margin-top:4px;color:#e0f2fe">${KIND_LABEL[f.kind] || "INCIDENCIA"}</div>
+                    <div style="color:#7dd3fc;font-size:12px;margin-top:2px;font-family:'IBM Plex Mono',monospace">${f.road || ""}</div>
+                    <div style="color:#4a8ab4;font-size:10px;margin-top:4px;font-family:'IBM Plex Mono',monospace">ID ${f.id}</div>`)
           .addTo(map);
       });
       el.addEventListener("mouseleave", () => {
         if (hoverPopupRef.current) { hoverPopupRef.current.remove(); hoverPopupRef.current = null; }
       });
-      const marker = new maplibregl.Marker({ element: el, anchor: "bottom" })
+      const marker = new maplibregl.Marker({ element: el, anchor: "center" })
         .setLngLat([f.lon, f.lat])
         .addTo(map);
       markersRef.current.push(marker);
     });
-  }, [filterKind]);
+  }, [filterKind, addLog]);
 
   useEffect(() => { renderEventMarkers(eventsData); }, [eventsData, filterKind, renderEventMarkers]);
 
@@ -225,7 +246,7 @@ export default function CommandCenter() {
         setSelected({
           id: p.id, kind: "parking", title: p.name || "Parking",
           description: `Plazas estimadas libres: ${p.available_estimate}${p.capacity ? ` / ${p.capacity}` : ""} · ${p.fee !== "unknown" ? `Tarifa: ${p.fee}` : "Tarifa no especificada"}`,
-          source: "OpenStreetMap", road: p.operator || "OSM",
+          source: "OPENSTREETMAP", road: p.operator || "OSM",
           lat: p.lat, lon: p.lon, severity: "info",
         });
       });
@@ -242,23 +263,22 @@ export default function CommandCenter() {
     const c = map.getCenter();
     setParkingLoading(true);
     setShowParking(true);
+    addLog("[NET ] Querying OSM Overpass for parking aggregator...", "info");
     try {
       const data = await fetchParking(c.lat, c.lng, 1500);
       setParkingData(data);
-    } catch (e) { console.error(e); }
-    finally { setParkingLoading(false); }
-  }, []);
+      addLog(`[DATA] Parking subsystem: ${data.count} nodes · ~${data.available_total_estimate} stalls`, "ok");
+    } catch (e) {
+      addLog(`[ERR ] Parking fetch failed: ${e.message}`, "err");
+    } finally { setParkingLoading(false); }
+  }, [addLog]);
 
   const toggleParking = useCallback(() => {
-    if (showParking) {
-      setShowParking(false);
-      setParkingData(null);
-    } else {
-      loadParkingHere();
-    }
-  }, [showParking, loadParkingHere]);
+    if (showParking) { setShowParking(false); setParkingData(null); addLog("[VIEW] Parking layer disabled", "info"); }
+    else loadParkingHere();
+  }, [showParking, loadParkingHere, addLog]);
 
-  // ---- measure tool ----
+  // ---- measure ----
   const haversineMeters = (a, b) => {
     const R = 6371000;
     const dLat = ((b.lat - a.lat) * Math.PI) / 180;
@@ -279,7 +299,7 @@ export default function CommandCenter() {
       map.addSource(id, { type: "geojson", data: geo });
       map.addLayer({
         id: id + "-line", type: "line", source: id,
-        paint: { "line-color": "#06b6d4", "line-width": 3, "line-dasharray": [2, 1] },
+        paint: { "line-color": "#22d3ee", "line-width": 3, "line-dasharray": [2, 1] },
       });
     }
     let total = 0;
@@ -307,18 +327,16 @@ export default function CommandCenter() {
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-
     const onClick = (e) => {
       if (!measureMode) return;
       const pt = e.lngLat;
       measurePointsRef.current.push(pt);
       const el = document.createElement("div");
-      el.style.cssText = "width:10px;height:10px;border-radius:50%;background:#06b6d4;border:2px solid #0a0a0a;box-shadow:0 0 8px rgba(6,182,212,0.6)";
+      el.style.cssText = "width:10px;height:10px;background:#22d3ee;border:2px solid #02101a;box-shadow:0 0 10px rgba(34,211,238,0.8)";
       const marker = new maplibregl.Marker({ element: el }).setLngLat(pt).addTo(map);
       measureMarkersRef.current.push(marker);
       updateMeasureLine();
     };
-
     const onMouseMove = (e) => {
       if (!measureMode) { setCursorMeasure(null); return; }
       const pts = measurePointsRef.current;
@@ -334,50 +352,36 @@ export default function CommandCenter() {
       }
       setCursorMeasure({ lng: e.lngLat.lng, lat: e.lngLat.lat, segment: seg, total: tot + seg });
     };
-
     const onMouseOut = () => setCursorMeasure(null);
-
     map.on("click", onClick);
     map.on("mousemove", onMouseMove);
     map.on("mouseout", onMouseOut);
-
-    if (measureMode) {
-      map.getCanvas().style.cursor = "crosshair";
-    } else {
-      map.getCanvas().style.cursor = "";
-    }
-    return () => {
-      map.off("click", onClick);
-      map.off("mousemove", onMouseMove);
-      map.off("mouseout", onMouseOut);
-    };
+    map.getCanvas().style.cursor = measureMode ? "crosshair" : "";
+    return () => { map.off("click", onClick); map.off("mousemove", onMouseMove); map.off("mouseout", onMouseOut); };
   }, [measureMode, updateMeasureLine]);
 
   const toggleMeasure = () => {
-    if (measureMode) {
-      clearMeasure();
-      setMeasureMode(false);
-    } else {
-      setMeasureMode(true);
-    }
+    if (measureMode) { clearMeasure(); setMeasureMode(false); addLog("[TOOL] Measure tool disabled", "info"); }
+    else { setMeasureMode(true); addLog("[TOOL] Measure tool armed · click points on map", "info"); }
   };
 
-  // ---- search ----
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
+    addLog(`[NET ] Geocoding "${searchQuery}"...`, "info");
     try {
       const r = await geocode(searchQuery);
       if (mapRef.current && r) {
         mapRef.current.flyTo({ center: [r.lon, r.lat], zoom: 14, duration: 1200 });
+        addLog(`[NAV ] Locked on ${r.display_name.slice(0, 40)}`, "ok");
       }
-    } catch (e) { console.error(e); }
+    } catch (e) { addLog(`[ERR ] Geocode miss: ${e.message}`, "err"); }
   };
 
-  // ---- locate ----
   const locateMe = () => {
     if (!navigator.geolocation || !mapRef.current) return;
     navigator.geolocation.getCurrentPosition((pos) => {
       mapRef.current.flyTo({ center: [pos.coords.longitude, pos.coords.latitude], zoom: 15, duration: 1200 });
+      addLog("[NAV ] Centered on operator position", "ok");
     });
   };
 
@@ -400,90 +404,108 @@ export default function CommandCenter() {
   }, [eventsData]);
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-[#0a0a0a]" data-testid="command-center">
+    <div className="relative w-screen h-screen overflow-hidden bg-[#020a14]" data-testid="command-center">
       {/* MAP */}
       <div ref={mapContainerRef} className="absolute inset-0" data-testid="map-container" />
 
-      {/* TOP HEADER */}
+      {/* Scanline overlay */}
+      <div className="scanline" style={{ top: 0 }} />
+
+      {/* ===== TOP HEADER ===== */}
       <header className="absolute top-0 left-0 right-0 z-50 panel border-x-0 border-t-0" data-testid="top-header">
-        <div className="flex items-center gap-4 px-5 py-3">
-          {/* Brand */}
-          <div className="flex items-center gap-3 pr-5 border-r border-white/10">
-            <div className="relative flex items-center justify-center w-9 h-9 rounded-md bg-gradient-to-br from-cyan-500/20 to-cyan-500/5 border border-cyan-500/40">
-              <Radio className="w-4 h-4 text-cyan-400" />
-              <div className="absolute -top-1 -right-1 live-dot" />
+        <div className="flex items-stretch">
+          {/* Brand block */}
+          <div className="flex items-center gap-3 px-5 py-3 border-r border-cyan-500/20">
+            <div className="gate-ring">
+              <Hexagon className="w-4 h-4 text-cyan-300" />
             </div>
-            <div>
-              <div className="font-display font-semibold text-[15px] leading-none tracking-tight">MOMENTUM</div>
-              <div className="font-mono text-[10px] tracking-[0.18em] text-zinc-400 mt-1">ROAD · COMMAND · CENTER</div>
+            <div className="leading-none">
+              <div className="font-display font-semibold text-[16px] tracking-[0.18em] text-cyan-100">MOMENTUM</div>
+              <div className="font-mono text-[10px] tracking-[0.32em] text-cyan-400/70 mt-1">PEGASUS · ROAD COMMAND</div>
             </div>
           </div>
 
-          {/* Search */}
-          <div className="flex items-center gap-2 flex-1 max-w-xl">
-            <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-white/5 border border-white/10 flex-1 hover:border-white/20 transition-colors">
-              <Search className="w-4 h-4 text-zinc-400 flex-shrink-0" />
-              <input
-                data-testid="search-input"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                placeholder="Buscar dirección, carretera, punto operativo…"
-                className="bg-transparent outline-none text-sm flex-1 placeholder:text-zinc-500"
-              />
-              <button data-testid="search-go-btn" onClick={handleSearch}
-                className="font-mono text-[11px] text-cyan-300 hover:text-cyan-200 px-2 py-0.5 rounded border border-cyan-500/30 bg-cyan-500/10">
-                IR
+          {/* Title row */}
+          <div className="flex-1 px-5 py-2.5 border-r border-cyan-500/20">
+            <div className="flex items-center gap-3">
+              <div className="font-mono text-[10px] tracking-[0.28em] text-cyan-300/80">GATE DIAGNOSTICS · TRAFFIC SUBSYSTEM</div>
+              <div className="h-3 w-px bg-cyan-500/30" />
+              <div className="font-mono text-[10px] tracking-[0.22em] text-cyan-200">SUBSYSTEM ANALYSIS · ALPHA V.2</div>
+            </div>
+            <div className="flex items-center gap-2 mt-2">
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-cyan-500/5 border border-cyan-500/25 flex-1 max-w-2xl">
+                <Search className="w-3.5 h-3.5 text-cyan-400/70 flex-shrink-0" />
+                <input
+                  data-testid="search-input"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                  placeholder="GEOCODE QUERY: dirección · carretera · punto operativo"
+                  className="bg-transparent outline-none text-xs font-mono flex-1 placeholder:text-cyan-700/70 text-cyan-100"
+                />
+                <button data-testid="search-go-btn" onClick={handleSearch}
+                  className="font-mono text-[10px] tracking-[0.18em] text-cyan-300 hover:text-cyan-100 px-2 py-0.5 border border-cyan-500/40 bg-cyan-500/10">
+                  EXEC
+                </button>
+              </div>
+              <button data-testid="locate-btn" onClick={locateMe} title="Centrar en mi posición"
+                className="p-1.5 bg-cyan-500/5 hover:bg-cyan-500/15 border border-cyan-500/25">
+                <Crosshair className="w-3.5 h-3.5 text-cyan-300" />
               </button>
             </div>
-            <button data-testid="locate-btn" onClick={locateMe} title="Centrar en mi posición"
-              className="p-2 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 transition-colors">
-              <Crosshair className="w-4 h-4 text-zinc-300" />
-            </button>
           </div>
 
-          {/* City selector */}
-          <div className="flex items-center gap-2">
-            <select
-              data-testid="city-select"
-              value={city}
-              onChange={(e) => setCity(e.target.value)}
-              className="bg-white/5 border border-white/10 hover:border-white/20 rounded-md px-3 py-2 text-sm font-medium outline-none cursor-pointer">
-              {cities.map((c) => (
-                <option key={c.id} value={c.id} className="bg-zinc-900">{c.name}</option>
-              ))}
-            </select>
-            <button data-testid="refresh-btn" onClick={() => loadEvents(city)}
-              className="flex items-center gap-2 px-3 py-2 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 text-sm transition-colors">
-              <RotateCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-              <span className="hidden md:inline">Actualizar</span>
-            </button>
-          </div>
-
-          {/* Live + clock */}
-          <div className="flex items-center gap-3 pl-4 border-l border-white/10">
-            <div className="flex items-center gap-2">
-              <div className="live-dot" />
-              <div className="font-mono text-[11px] tracking-[0.15em] text-cyan-300">LIVE</div>
+          {/* City + Refresh */}
+          <div className="flex items-center gap-2 px-4 py-3 border-r border-cyan-500/20">
+            <div>
+              <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 mb-1">SECTOR</div>
+              <select
+                data-testid="city-select"
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                className="bg-cyan-500/5 border border-cyan-500/30 px-2 py-1 text-xs font-mono text-cyan-100 outline-none cursor-pointer hover:border-cyan-500/60">
+                {cities.map((c) => (
+                  <option key={c.id} value={c.id} className="bg-[#020a14]">{c.name}</option>
+                ))}
+              </select>
             </div>
-            <div className="font-mono text-xs text-zinc-400" data-testid="last-update">
-              {lastUpdate ? formatTime(lastUpdate.toISOString()) : "--:--:--"}
+            <button data-testid="refresh-btn" onClick={() => loadEvents(city)}
+              className="flex items-center gap-1.5 px-3 py-2 mt-3 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/40 text-cyan-100 text-xs font-mono tracking-wide transition-colors">
+              <RotateCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+              <span className="hidden md:inline">RELOAD</span>
+            </button>
+          </div>
+
+          {/* Live + Clock */}
+          <div className="flex items-center gap-4 px-5 py-3">
+            <div>
+              <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 mb-1">FEED</div>
+              <div className="flex items-center gap-2">
+                <div className="live-dot" />
+                <div className="font-mono text-xs tracking-[0.2em] text-cyan-300">LIVE</div>
+              </div>
+            </div>
+            <div className="border-l border-cyan-500/20 pl-4">
+              <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 mb-1">UTC</div>
+              <div className="font-mono text-sm tracking-tight text-cyan-100 tabular-nums" data-testid="last-update">
+                {fmtTime(clock)}
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Toolbar row */}
-        <div className="flex items-center gap-2 px-5 pb-3 flex-wrap">
-          <div className="flex items-center gap-0 bg-white/5 border border-white/10 rounded-md p-1">
+        {/* Sub-toolbar */}
+        <div className="flex items-center gap-3 px-5 py-2 border-t border-cyan-500/15 bg-cyan-500/3">
+          <div className="flex items-center gap-0 border border-cyan-500/30">
             {Object.values(STYLES).map((s) => (
               <button key={s.id}
                 data-testid={`map-style-${s.id}`}
                 onClick={() => setMapStyle(s.id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors ${mapStyle === s.id ? "bg-cyan-500/20 text-cyan-300" : "text-zinc-400 hover:text-zinc-200"}`}>
-                {s.id === "normal" && <MapIcon className="w-3.5 h-3.5" />}
-                {s.id === "satellite" && <Satellite className="w-3.5 h-3.5" />}
-                {s.id === "threed" && <Mountain className="w-3.5 h-3.5" />}
-                {s.label}
+                className={`flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono tracking-wide transition-colors ${mapStyle === s.id ? "bg-cyan-400 text-[#020a14]" : "text-cyan-300 hover:bg-cyan-500/10"}`}>
+                {s.id === "normal" && <MapIcon className="w-3 h-3" />}
+                {s.id === "satellite" && <Satellite className="w-3 h-3" />}
+                {s.id === "threed" && <Mountain className="w-3 h-3" />}
+                {s.label.toUpperCase()}
               </button>
             ))}
           </div>
@@ -491,95 +513,87 @@ export default function CommandCenter() {
           <button
             data-testid="measure-btn"
             onClick={toggleMeasure}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${measureMode ? "bg-cyan-500/20 text-cyan-300 border-cyan-500/40" : "bg-white/5 border-white/10 text-zinc-300 hover:bg-white/10"}`}>
-            <Ruler className="w-3.5 h-3.5" />
-            {measureMode ? "Medir: ON" : "Medir calle"}
+            className={`flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono tracking-wide border transition-colors ${measureMode ? "bg-cyan-400 text-[#020a14] border-cyan-400" : "bg-transparent border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10"}`}>
+            <Ruler className="w-3 h-3" />
+            MEASURE {measureMode ? "· ON" : ""}
           </button>
 
           {measureMode && (
             <button data-testid="clear-measure-btn" onClick={clearMeasure}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-white/5 border border-white/10 hover:bg-white/10">
-              <X className="w-3.5 h-3.5" /> Limpiar
+              className="flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono tracking-wide bg-transparent border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10">
+              <X className="w-3 h-3" /> CLEAR
             </button>
           )}
 
           <button data-testid="parking-btn" onClick={toggleParking}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border transition-colors ${showParking ? "bg-cyan-500/20 text-cyan-300 border-cyan-500/40" : "bg-white/5 border-white/10 text-zinc-300 hover:bg-white/10"}`}>
-            {parkingLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <SquareParking className="w-3.5 h-3.5" />}
-            Parking cercano {parkingData ? `(${parkingData.count})` : ""}
+            className={`flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono tracking-wide border transition-colors ${showParking ? "bg-cyan-400 text-[#020a14] border-cyan-400" : "bg-transparent border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10"}`}>
+            {parkingLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <SquareParking className="w-3 h-3" />}
+            PARKING {parkingData ? `[${parkingData.count}]` : ""}
           </button>
 
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/5 border border-white/10 text-xs">
-            <Layers className="w-3.5 h-3.5 text-zinc-400" />
+          <div className="flex items-center gap-1.5 px-3 py-1 border border-cyan-500/30">
+            <Layers className="w-3 h-3 text-cyan-400" />
             <select
               data-testid="filter-kind"
               value={filterKind}
               onChange={(e) => setFilterKind(e.target.value)}
-              className="bg-transparent outline-none text-xs cursor-pointer">
-              <option value="all" className="bg-zinc-900">Todas las capas</option>
-              <option value="accidente" className="bg-zinc-900">Accidentes</option>
-              <option value="obras" className="bg-zinc-900">Obras</option>
-              <option value="congestion" className="bg-zinc-900">Congestión</option>
-              <option value="peligro" className="bg-zinc-900">Peligros</option>
-              <option value="meteo" className="bg-zinc-900">Meteo</option>
-              <option value="incidencia" className="bg-zinc-900">Otras</option>
+              className="bg-transparent outline-none text-[11px] font-mono tracking-wide text-cyan-100 cursor-pointer">
+              <option value="all" className="bg-[#020a14]">ALL LAYERS</option>
+              <option value="accidente" className="bg-[#020a14]">ACCIDENTS</option>
+              <option value="obras" className="bg-[#020a14]">WORKS</option>
+              <option value="congestion" className="bg-[#020a14]">CONGESTION</option>
+              <option value="peligro" className="bg-[#020a14]">HAZARDS</option>
+              <option value="meteo" className="bg-[#020a14]">METEO</option>
+              <option value="incidencia" className="bg-[#020a14]">OTHER</option>
             </select>
           </div>
 
           {measureMode && cursorMeasure && (
-            <div className="font-mono text-xs text-cyan-300 px-3 py-1.5 rounded-md bg-cyan-500/10 border border-cyan-500/30">
-              ▸ Segmento: {Math.round(cursorMeasure.segment)} m · Total: {(cursorMeasure.total / 1000).toFixed(3)} km
+            <div className="font-mono text-[10px] tracking-wide text-cyan-300 px-3 py-1 bg-cyan-500/15 border border-cyan-500/50">
+              ▸ SEG {Math.round(cursorMeasure.segment)}m · TOTAL {(cursorMeasure.total / 1000).toFixed(3)}km
             </div>
           )}
-
           {!measureMode && measureDistance > 0 && (
-            <div className="font-mono text-xs text-cyan-300 px-3 py-1.5 rounded-md bg-cyan-500/10 border border-cyan-500/30">
-              ▸ {Math.round(measureDistance)} m · {(measureDistance / 1000).toFixed(3)} km
+            <div className="font-mono text-[10px] tracking-wide text-cyan-300 px-3 py-1 bg-cyan-500/15 border border-cyan-500/50">
+              ▸ MEASURED {Math.round(measureDistance)}m · {(measureDistance / 1000).toFixed(3)}km
             </div>
           )}
         </div>
       </header>
 
-      {/* LEFT PANEL - KPIs + Event Queue */}
+      {/* ===== LEFT PANEL ===== */}
       <aside
-        className={`absolute left-4 top-[148px] bottom-[56px] w-[340px] z-40 panel rounded-lg overflow-hidden flex flex-col anim-fade-up transition-transform ${leftOpen ? "translate-x-0" : "-translate-x-[360px]"}`}
+        className="absolute left-3 top-[150px] bottom-[200px] w-[340px] z-40 panel brackets flex flex-col anim-fade-up"
         data-testid="left-panel"
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
-          <div className="flex items-center gap-2">
-            <Activity className="w-4 h-4 text-cyan-400" />
-            <div className="font-display font-semibold text-sm">PANEL TÁCTICO</div>
-          </div>
-          <button onClick={() => setLeftOpen(false)} className="text-zinc-500 hover:text-zinc-200">
-            <X className="w-4 h-4" />
-          </button>
+        <div className="section-head"><span>SUBSYSTEM ANALYSIS · ALPHA V.2</span><span className="text-cyan-300/60">{pad(kpi.count)}</span></div>
+
+        {/* KPI grid (Atlantis style: numeric heavy) */}
+        <div className="grid grid-cols-3 border-b border-cyan-500/15" data-testid="kpi-grid">
+          <KPI label="SITREC" value={pad(kpi.count)} accent="text-cyan-100" />
+          <KPI label="RISK" value={kpi.risk}
+               accent={kpi.risk === "ALTO" ? "text-red-400" : kpi.risk === "MEDIO" ? "text-amber-400" : "text-emerald-400"} />
+          <KPI label="LAYER" value={STYLES[mapStyle].label.toUpperCase()} accent="text-cyan-200" small />
+          <KPI label="CRIT" value={pad(kpi.critical, 3)} accent="text-red-400" small />
+          <KPI label="WARN" value={pad(kpi.warning, 3)} accent="text-amber-400" small />
+          <KPI label="INFO" value={pad(kpi.info, 3)} accent="text-cyan-200" small last />
         </div>
 
-        {/* KPI grid */}
-        <div className="grid grid-cols-2 border-b border-white/10" data-testid="kpi-grid">
-          <KPI label="Eventos" value={kpi.count} accent="text-white" />
-          <KPI label="Riesgo" value={kpi.risk} accent={kpi.risk === "ALTO" ? "text-red-400" : kpi.risk === "MEDIO" ? "text-amber-400" : "text-emerald-400"} />
-          <KPI label="Críticos" value={kpi.critical} accent="text-red-400" />
-          <KPI label="Avisos" value={kpi.warning} accent="text-amber-400" />
-          <KPI label="Ciudad" value={cities.find((c) => c.id === city)?.name || city.toUpperCase()} accent="text-cyan-300" small />
-          <KPI label="Vista" value={STYLES[mapStyle].label} accent="text-cyan-300" small />
-        </div>
-
-        {/* Kinds breakdown */}
-        <div className="px-4 py-3 border-b border-white/10">
-          <div className="font-mono text-[10px] tracking-[0.15em] text-zinc-500 mb-2">DISTRIBUCIÓN POR TIPO</div>
+        {/* Distribution */}
+        <div className="px-3 py-2.5 border-b border-cyan-500/15">
+          <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 mb-2">EVENT MATRIX · DISTRIBUTION</div>
           <div className="space-y-1.5">
-            {kinds.length === 0 && <div className="text-xs text-zinc-500 font-mono">Sin datos…</div>}
+            {kinds.length === 0 && <div className="text-[10px] text-cyan-700 font-mono">[ AWAITING DATAFEED ]</div>}
             {kinds.map(([k, n]) => {
               const Icon = KIND_ICON[k] || Radio;
               return (
-                <div key={k} className="flex items-center gap-2 text-xs">
-                  <Icon className="w-3.5 h-3.5" style={{ color: `var(--${k}, #71717a)` }} />
-                  <span className="capitalize text-zinc-300">{KIND_LABEL[k] || k}</span>
-                  <div className="flex-1 h-1 bg-white/5 rounded-full overflow-hidden">
-                    <div className="h-full rounded-full" style={{ width: `${Math.min(100, (n / (eventsData?.count || 1)) * 100)}%`, background: `var(--${k}, #71717a)` }} />
+                <div key={k} className="flex items-center gap-2 text-[11px]">
+                  <Icon className="w-3 h-3" style={{ color: `var(--${k}, #67e8f9)` }} />
+                  <span className="font-mono tracking-wide text-cyan-200 w-20 uppercase">{KIND_LABEL[k] || k}</span>
+                  <div className="flex-1 h-1.5 bg-cyan-900/40 overflow-hidden border border-cyan-500/15">
+                    <div className="h-full" style={{ width: `${Math.min(100, (n / (eventsData?.count || 1)) * 100)}%`, background: `var(--${k}, #67e8f9)` }} />
                   </div>
-                  <span className="font-mono text-[11px] text-zinc-400 tabular-nums w-6 text-right">{n}</span>
+                  <span className="font-mono text-[10px] text-cyan-100 tabular-nums w-7 text-right">{pad(n, 3)}</span>
                 </div>
               );
             })}
@@ -588,22 +602,20 @@ export default function CommandCenter() {
 
         {/* Event Queue */}
         <div className="flex-1 overflow-hidden flex flex-col">
-          <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/10">
-            <div className="font-mono text-[10px] tracking-[0.15em] text-zinc-500">COLA DE EVENTOS</div>
-            <div className="font-mono text-[10px] text-cyan-300">{filteredFeatures.length}</div>
-          </div>
+          <div className="section-head"><span>SITUATION RECORD QUEUE</span><span className="text-cyan-300/60">{pad(filteredFeatures.length)}</span></div>
           <div className="flex-1 overflow-y-auto" data-testid="event-queue">
             {loading && (
-              <div className="flex items-center justify-center py-8 text-zinc-500 text-xs gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" /> Conectando con DGT 3.0…
+              <div className="flex items-center justify-center py-8 text-cyan-500/70 text-[11px] gap-2 font-mono">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> ESTABLISHING DGT LINK…
               </div>
             )}
             {!loading && filteredFeatures.length === 0 && (
-              <div className="px-4 py-6 text-xs text-zinc-500">No hay incidencias en la región seleccionada.</div>
+              <div className="px-3 py-6 text-[11px] text-cyan-700 font-mono">[ NO RECORDS IN SECTOR ]</div>
             )}
-            {filteredFeatures.map((f) => (
-              <EventRow key={f.id} f={f} active={selected?.id === f.id} onClick={() => {
+            {filteredFeatures.slice(0, 200).map((f, idx) => (
+              <EventRow key={f.id} f={f} idx={idx} active={selected?.id === f.id} onClick={() => {
                 setSelected(f);
+                addLog(`[SEL ] Target acquired ${f.id}`, "info");
                 mapRef.current?.flyTo({ center: [f.lon, f.lat], zoom: 14, duration: 800 });
               }} />
             ))}
@@ -611,121 +623,203 @@ export default function CommandCenter() {
         </div>
       </aside>
 
-      {!leftOpen && (
-        <button onClick={() => setLeftOpen(true)}
-          className="absolute left-4 top-[160px] z-40 panel rounded-lg p-2 hover:bg-white/5"
-          data-testid="left-toggle">
-          <ChevronRight className="w-4 h-4" />
-        </button>
-      )}
-
-      {/* RIGHT PANEL - Detail + Sources */}
+      {/* ===== RIGHT PANEL ===== */}
       <aside
-        className={`absolute right-4 top-[148px] bottom-[56px] w-[340px] z-40 panel rounded-lg overflow-hidden flex flex-col anim-fade-up transition-transform ${rightOpen ? "translate-x-0" : "translate-x-[360px]"}`}
+        className="absolute right-3 top-[150px] bottom-[200px] w-[340px] z-40 panel brackets flex flex-col anim-fade-up"
         data-testid="right-panel"
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
-          <div className="flex items-center gap-2">
-            <Eye className="w-4 h-4 text-cyan-400" />
-            <div className="font-display font-semibold text-sm">DETALLE OPERATIVO</div>
-          </div>
-          <button onClick={() => setRightOpen(false)} className="text-zinc-500 hover:text-zinc-200">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        <div className="section-head"><span>{selected ? "TARGET ANALYSIS" : "GR MATRIX · LIVE OPS"}</span><span className="text-cyan-300/60">▣</span></div>
 
         <div className="flex-1 overflow-y-auto">
           {!selected && (
-            <div className="px-4 py-6">
-              <div className="text-xs text-zinc-500 leading-relaxed">
-                Selecciona una incidencia en el mapa o en la cola para ver inteligencia detallada, fuente y acciones rápidas.
+            <>
+              {/* Chevron diagnostics like atlantis */}
+              <div className="px-3 py-3 border-b border-cyan-500/15">
+                <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 mb-2">CHEVRON ANALYSIS</div>
+                <div className="grid grid-cols-9 gap-1">
+                  {Array.from({ length: 36 }).map((_, i) => {
+                    const active = (i + (eventsData?.count || 0)) % 3 !== 0;
+                    return (
+                      <div key={i}
+                           className="aspect-square border"
+                           style={{
+                             background: active ? "rgba(34,211,238,0.5)" : "rgba(34,211,238,0.08)",
+                             borderColor: active ? "var(--cyan)" : "rgba(34,211,238,0.15)",
+                             animation: active ? `chevron-flicker ${1 + (i % 5) * 0.3}s infinite ease-in-out` : "none",
+                           }} />
+                    );
+                  })}
+                </div>
               </div>
-              <div className="mt-6">
-                <div className="font-mono text-[10px] tracking-[0.15em] text-zinc-500 mb-2">FUENTES CONECTADAS</div>
-                <SourceBadge name="DGT 3.0 · DATEX2" status={healthData?.sources?.["DGT 3.0"]} />
-                <SourceBadge name="SCT · Catalunya" status={healthData?.sources?.SCT} />
-                <SourceBadge name="Madrid Abierto" status={healthData?.sources?.Madrid} />
-                <SourceBadge name="OpenStreetMap" status={healthData?.sources?.OSM} />
+
+              {/* Subroutines list */}
+              <div className="px-3 py-3 border-b border-cyan-500/15">
+                <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 mb-2">PRIMARY GTF SUBROUTINES</div>
+                <div className="space-y-0.5">
+                  {SUBROUTINES.map((s) => (
+                    <div key={s[0]} className="flex items-center justify-between font-mono text-[10px] tracking-wider atlantis-row px-1 py-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-cyan-700">{s[0]}</span>
+                        <span className="text-cyan-200">{s[1]}</span>
+                      </div>
+                      <span className={`text-[9px] tracking-wider ${s[2] === "ACTIVE" ? "text-emerald-400" : s[2] === "STANDBY" ? "text-cyan-500" : "text-zinc-600"}`}>
+                        {s[2] === "ACTIVE" ? "● ACTIVE" : s[2] === "STANDBY" ? "○ STANDBY" : "× OFFLINE"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
+
+              {/* Source health */}
+              <div className="px-3 py-3">
+                <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 mb-2">DATA FEED STATUS</div>
+                <SourceBadge name="DGT 3.0 · DATEX2 v36" status={healthData?.sources?.["DGT 3.0"]} />
+                <SourceBadge name="SCT · Catalunya GML" status={healthData?.sources?.SCT} />
+                <SourceBadge name="MADRID · Open KML" status={healthData?.sources?.Madrid} />
+                <SourceBadge name="OSM · Overpass API" status={healthData?.sources?.OSM} />
+              </div>
+            </>
           )}
           {selected && <EventDetail f={selected} onClose={() => setSelected(null)} />}
         </div>
       </aside>
 
-      {!rightOpen && (
-        <button onClick={() => setRightOpen(true)}
-          className="absolute right-4 top-[160px] z-40 panel rounded-lg p-2 hover:bg-white/5"
-          data-testid="right-toggle">
-          <ChevronRight className="w-4 h-4 rotate-180" />
-        </button>
-      )}
+      {/* ===== BOTTOM TABULAR PANEL ===== */}
+      <section className="absolute bottom-[30px] left-3 right-3 h-[160px] z-40 panel-solid brackets flex anim-fade-up" data-testid="diagnostic-panel">
+        {/* Left: Diagnostic Stream */}
+        <div className="w-[35%] border-r border-cyan-500/20 flex flex-col">
+          <div className="section-head"><span>DIAGNOSTIC STREAM</span><div className="flex items-center gap-1.5"><div className="live-dot" /><span className="text-cyan-300/60">RT</span></div></div>
+          <div className="flex-1 overflow-hidden relative bg-grid">
+            <div className="absolute inset-0 overflow-y-auto px-3 py-2 font-mono text-[10px] leading-relaxed">
+              {logs.length === 0 && <div className="text-cyan-700">{"// awaiting telemetry..."}</div>}
+              {logs.map((l) => (
+                <div key={l.id} className="flex gap-2 anim-fade-up" style={{ animationDuration: "180ms" }}>
+                  <span className="text-cyan-700 tabular-nums shrink-0">{fmtTime(l.t)}</span>
+                  <span className={l.kind === "err" ? "text-red-400" : l.kind === "ok" ? "text-emerald-400" : "text-cyan-300"}>
+                    {l.msg}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
 
-      {/* BOTTOM STATUS BAR */}
-      <footer className="absolute bottom-0 left-0 right-0 z-50 panel border-x-0 border-b-0" data-testid="status-bar">
-        <div className="flex items-center justify-between px-5 py-2 text-xs">
+        {/* Middle: Severity tabular subsets (Atlantis style) */}
+        <div className="flex-1 border-r border-cyan-500/20 flex flex-col">
+          <div className="section-head"><span>EVENT SUBSET · TACTICAL TABLE</span><span className="text-cyan-300/60">FREQ 1.000Hz</span></div>
+          <div className="flex-1 overflow-hidden bg-stripes">
+            <div className="grid grid-cols-12 gap-px text-[10px] font-mono px-2 py-1.5 text-cyan-500/70 tracking-wider border-b border-cyan-500/10">
+              <div className="col-span-1">IDX</div>
+              <div className="col-span-2">REC</div>
+              <div className="col-span-2">KIND</div>
+              <div className="col-span-2">SEV</div>
+              <div className="col-span-2">SRC</div>
+              <div className="col-span-3 text-right">COORDS</div>
+            </div>
+            <div className="overflow-y-auto" style={{ maxHeight: "104px" }}>
+              {filteredFeatures.slice(0, 50).map((f, i) => (
+                <div key={f.id}
+                     onClick={() => { setSelected(f); mapRef.current?.flyTo({ center: [f.lon, f.lat], zoom: 14 }); }}
+                     className="grid grid-cols-12 gap-px text-[10px] font-mono px-2 py-0.5 cursor-pointer atlantis-row tracking-wide">
+                  <div className="col-span-1 text-cyan-700 tabular-nums">{pad(i + 1, 3)}</div>
+                  <div className="col-span-2 text-cyan-200 truncate">{f.id}</div>
+                  <div className="col-span-2 uppercase" style={{ color: `var(--${f.kind}, #67e8f9)` }}>{KIND_LABEL[f.kind] || f.kind}</div>
+                  <div className="col-span-2" style={{ color: SEV_COLOR[f.severity] || "#67e8f9" }}>{(f.severity || "info").toUpperCase()}</div>
+                  <div className="col-span-2 text-cyan-300/80">{f.source.split(" ")[0]}</div>
+                  <div className="col-span-3 text-right text-cyan-100 tabular-nums">{f.lat?.toFixed(3)},{f.lon?.toFixed(3)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Right: Telemetry */}
+        <div className="w-[22%] flex flex-col">
+          <div className="section-head"><span>TELEMETRY</span><span className="text-cyan-300/60">v2.0</span></div>
+          <div className="flex-1 px-3 py-2 font-mono text-[10px] space-y-1.5">
+            <Tel label="LAT" value={mapCenter.lat.toFixed(5)} />
+            <Tel label="LON" value={mapCenter.lng.toFixed(5)} />
+            <Tel label="ZOOM" value={zoom} />
+            <Tel label="PITCH" value={`${pitch}°`} />
+            <Tel label="BEARING" value={`${bearing}°`} />
+            <Tel label="MODE" value={mapStyle.toUpperCase()} />
+            <Tel label="LAST SYNC" value={fmtTime(lastUpdate)} accent />
+          </div>
+        </div>
+      </section>
+
+      {/* ===== STATUS BAR ===== */}
+      <footer className="absolute bottom-0 left-0 right-0 z-50 panel-solid border-x-0 border-b-0" data-testid="status-bar">
+        <div className="flex items-center justify-between px-5 py-1.5 text-[10px] font-mono tracking-wider">
           <div className="flex items-center gap-5">
             <StatusPill name="DGT 3.0" status={healthData?.sources?.["DGT 3.0"]} />
             <StatusPill name="SCT" status={healthData?.sources?.SCT} />
-            <StatusPill name="Madrid" status={healthData?.sources?.Madrid} />
+            <StatusPill name="MADRID" status={healthData?.sources?.Madrid} />
             <StatusPill name="OSM" status="OK" />
+            <div className="flex items-center gap-1.5">
+              <div className="live-dot" />
+              <span className="text-cyan-300">REAL-TIME</span>
+            </div>
           </div>
-          <div className="flex items-center gap-4 font-mono text-[11px] text-zinc-500">
-            <span>PITCH {pitch}°</span>
-            <span>MODE {mapStyle.toUpperCase()}</span>
-            {eventsData?.center && (
-              <span>{eventsData.center.lat.toFixed(4)}, {eventsData.center.lon.toFixed(4)}</span>
-            )}
-            <span className="text-cyan-300">v2.0 · Real-time</span>
+          <div className="flex items-center gap-4 text-cyan-400/70 tabular-nums">
+            <span>SECTOR <span className="text-cyan-200">{(cities.find((c) => c.id === city)?.name || city).toUpperCase()}</span></span>
+            <span>RANGE {eventsData?.radius_km || 150}KM</span>
+            <span>{mapCenter.lat.toFixed(4)}, {mapCenter.lng.toFixed(4)}</span>
+            <span className="text-cyan-300">{fmtTime(clock)} UTC</span>
+            <span className="text-cyan-300">MOMENTUM · ROAD · COMMAND · v2.0</span>
           </div>
         </div>
       </footer>
 
       {/* Loading overlay */}
       {loading && !eventsData && (
-        <div className="absolute inset-0 z-[60] bg-black/70 backdrop-blur-md flex flex-col items-center justify-center pointer-events-none">
-          <div className="relative w-24 h-24">
+        <div className="absolute inset-0 z-[60] bg-[#020a14]/85 backdrop-blur-md flex flex-col items-center justify-center pointer-events-none">
+          <div className="relative w-32 h-32">
             <div className="radar-sweep" style={{ borderRadius: "50%" }} />
             <div className="absolute inset-0 border border-cyan-500/40 rounded-full" />
-            <div className="absolute inset-2 border border-cyan-500/30 rounded-full" />
-            <div className="absolute inset-4 border border-cyan-500/20 rounded-full" />
+            <div className="absolute inset-3 border border-cyan-500/30 rounded-full" />
+            <div className="absolute inset-6 border border-cyan-500/20 rounded-full" />
             <div className="absolute inset-0 flex items-center justify-center">
-              <Radio className="w-6 h-6 text-cyan-400 animate-pulse" />
+              <Hexagon className="w-7 h-7 text-cyan-400 animate-pulse" />
             </div>
           </div>
-          <div className="mt-6 font-mono text-xs tracking-[0.2em] text-cyan-300">CONECTANDO · DGT 3.0</div>
+          <div className="mt-6 font-mono text-[11px] tracking-[0.4em] text-cyan-300">CONNECTING · DGT 3.0 · DATEX2</div>
+          <div className="mt-2 font-mono text-[10px] tracking-[0.3em] text-cyan-600">RUNNING DIAGNOSTICS · ALPHA V.2</div>
         </div>
       )}
     </div>
   );
 }
 
-function KPI({ label, value, accent = "text-white", small = false }) {
+/* ===== Sub-components ===== */
+
+function KPI({ label, value, accent = "text-cyan-100", small = false, last = false }) {
   return (
-    <div className="px-4 py-3 border-r border-b border-white/10 last:border-r-0">
-      <div className="font-mono text-[9px] tracking-[0.18em] text-zinc-500 uppercase mb-1">{label}</div>
-      <div className={`font-mono ${small ? "text-base" : "text-2xl"} font-semibold tabular-nums ${accent}`}>{value}</div>
+    <div className={`px-3 py-2 border-b border-cyan-500/15 ${!last ? "border-r" : ""}`}>
+      <div className="font-mono text-[8px] tracking-[0.25em] text-cyan-500/80 mb-0.5">{label}</div>
+      <div className={`font-mono ${small ? "text-sm" : "text-xl"} font-semibold tabular-nums ${accent}`}>{value}</div>
     </div>
   );
 }
 
-function EventRow({ f, active, onClick }) {
+function EventRow({ f, idx, active, onClick }) {
   const Icon = KIND_ICON[f.kind] || Radio;
-  const color = SEV_COLOR[f.severity] || "#71717a";
+  const color = SEV_COLOR[f.severity] || "var(--cyan)";
   return (
     <button
       data-testid={`event-row-${f.id}`}
       onClick={onClick}
-      className={`w-full text-left flex items-start gap-2.5 px-4 py-2.5 border-b border-white/5 hover:bg-white/5 transition-colors ${active ? "bg-white/5" : ""}`}
+      className={`w-full text-left flex items-center gap-2 px-2 py-1.5 border-b border-cyan-500/8 atlantis-row ${active ? "bg-cyan-500/15" : ""}`}
       style={{ borderLeft: `2px solid ${color}` }}
     >
-      <Icon className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color }} />
+      <span className="font-mono text-[10px] text-cyan-700 tabular-nums w-7 text-right">{pad(idx + 1, 3)}</span>
+      <Icon className="w-3 h-3 flex-shrink-0" style={{ color }} />
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-0.5">
-          <span className="text-sm font-medium truncate">{KIND_LABEL[f.kind] || "Incidencia"}</span>
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-mono text-[11px] font-semibold tracking-wide text-cyan-100">{KIND_LABEL[f.kind] || "INCIDENCIA"}</span>
+          <span className="font-mono text-[9px] text-cyan-600">{f.source.split(" ")[0]}</span>
         </div>
-        <div className="text-xs text-zinc-400 truncate">{f.road || f.title}</div>
-        <div className="font-mono text-[10px] text-zinc-600 tracking-wide mt-1">{f.source}</div>
+        <div className="font-mono text-[10px] text-cyan-300/80 truncate">{f.road || f.id}</div>
       </div>
     </button>
   );
@@ -733,50 +827,46 @@ function EventRow({ f, active, onClick }) {
 
 function EventDetail({ f, onClose }) {
   const Icon = KIND_ICON[f.kind] || Radio;
-  const color = SEV_COLOR[f.severity] || "#71717a";
+  const color = SEV_COLOR[f.severity] || "var(--cyan)";
   return (
-    <div className="p-4 anim-fade-up" data-testid="event-detail">
-      <div className="flex items-start gap-3 mb-4">
-        <div className="w-10 h-10 rounded-md flex items-center justify-center" style={{ background: `${color}20`, border: `1px solid ${color}40` }}>
-          <Icon className="w-5 h-5" style={{ color }} />
-        </div>
-        <div className="flex-1">
-          <div className="font-mono text-[10px] tracking-[0.15em] text-zinc-500 uppercase">{f.source}</div>
-          <div className="font-display font-semibold text-base mt-0.5">{KIND_LABEL[f.kind] || f.title}</div>
+    <div className="anim-fade-up" data-testid="event-detail">
+      <div className="px-3 py-3 border-b border-cyan-500/15">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 flex items-center justify-center border" style={{ borderColor: color, background: `${color}1A` }}>
+            <Icon className="w-5 h-5" style={{ color }} />
+          </div>
+          <div className="flex-1">
+            <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80">REC · {f.id}</div>
+            <div className="font-display font-semibold text-base text-cyan-100 mt-0.5 tracking-wide">{KIND_LABEL[f.kind] || f.title}</div>
+            <div className="font-mono text-[10px] text-cyan-400 tracking-wider mt-0.5">{f.source}</div>
+          </div>
         </div>
       </div>
 
-      <div className="space-y-3 text-sm">
-        {f.road && (
-          <Field label="Vía">{f.road}</Field>
-        )}
-        <Field label="Descripción">
-          <span className="text-zinc-300 leading-relaxed">{f.description}</span>
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Latitud" mono>{f.lat?.toFixed(5)}</Field>
-          <Field label="Longitud" mono>{f.lon?.toFixed(5)}</Field>
+      <div className="px-3 py-2 space-y-2 border-b border-cyan-500/15">
+        {f.road && <Field label="VECTOR / ROAD">{f.road}</Field>}
+        <Field label="ANALYSIS">{f.description}</Field>
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="LATITUDE" mono>{f.lat?.toFixed(5)}</Field>
+          <Field label="LONGITUDE" mono>{f.lon?.toFixed(5)}</Field>
         </div>
-        <Field label="Severidad">
-          <span className="px-2 py-0.5 rounded text-[11px] font-mono tracking-wide" style={{ background: `${color}20`, color, border: `1px solid ${color}50` }}>
+        <Field label="SEVERITY">
+          <span className="px-2 py-0.5 text-[10px] font-mono tracking-[0.18em]"
+                style={{ background: `${color}1F`, color, border: `1px solid ${color}80` }}>
             {(f.severity || "info").toUpperCase()}
           </span>
         </Field>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-2">
-        <a
-          data-testid="event-gmaps"
-          target="_blank" rel="noreferrer"
-          href={`https://www.google.com/maps/dir/?api=1&destination=${f.lat},${f.lon}`}
-          className="text-center px-3 py-2 rounded-md bg-white/5 border border-white/10 hover:bg-white/10 text-xs">
-          Abrir en Maps
+      <div className="px-3 py-2 grid grid-cols-2 gap-2">
+        <a data-testid="event-gmaps" target="_blank" rel="noreferrer"
+           href={`https://www.google.com/maps/dir/?api=1&destination=${f.lat},${f.lon}`}
+           className="text-center px-2 py-1.5 bg-cyan-500/10 border border-cyan-500/40 hover:bg-cyan-500/20 text-[10px] font-mono tracking-wider text-cyan-100">
+          ROUTE TO TARGET
         </a>
-        <button
-          data-testid="event-close"
-          onClick={onClose}
-          className="px-3 py-2 rounded-md bg-white/5 border border-white/10 hover:bg-white/10 text-xs">
-          Cerrar
+        <button data-testid="event-close" onClick={onClose}
+          className="px-2 py-1.5 bg-transparent border border-cyan-500/40 hover:bg-cyan-500/10 text-[10px] font-mono tracking-wider text-cyan-100">
+          DISENGAGE
         </button>
       </div>
     </div>
@@ -786,8 +876,17 @@ function EventDetail({ f, onClose }) {
 function Field({ label, children, mono = false }) {
   return (
     <div>
-      <div className="font-mono text-[10px] tracking-[0.15em] text-zinc-500 uppercase mb-1">{label}</div>
-      <div className={mono ? "font-mono text-sm text-zinc-200" : "text-sm text-zinc-100"}>{children}</div>
+      <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 mb-0.5">{label}</div>
+      <div className={mono ? "font-mono text-[12px] text-cyan-100" : "text-[12px] text-cyan-100/90 leading-snug"}>{children}</div>
+    </div>
+  );
+}
+
+function Tel({ label, value, accent = false }) {
+  return (
+    <div className="flex items-center justify-between border-b border-cyan-500/10 pb-1">
+      <span className="text-cyan-500/80 tracking-wider">{label}</span>
+      <span className={`tabular-nums ${accent ? "text-cyan-300" : "text-cyan-100"}`}>{value || "—"}</span>
     </div>
   );
 }
@@ -795,10 +894,10 @@ function Field({ label, children, mono = false }) {
 function StatusPill({ name, status }) {
   const ok = status === "OK";
   return (
-    <div className="flex items-center gap-2" data-testid={`status-${name.toLowerCase().replace(/\s/g, '-').replace('.','-')}`}>
-      <div className={`w-1.5 h-1.5 rounded-full ${ok ? "bg-emerald-400" : status === "DOWN" ? "bg-red-500" : "bg-zinc-600"}`} />
-      <span className="font-mono text-[11px] text-zinc-400">{name}</span>
-      <span className={`font-mono text-[10px] ${ok ? "text-emerald-400" : status === "DOWN" ? "text-red-400" : "text-zinc-500"}`}>
+    <div className="flex items-center gap-1.5" data-testid={`status-${name.toLowerCase().replace(/\s/g, '-').replace('.','-')}`}>
+      <div className={`w-1.5 h-1.5 ${ok ? "bg-emerald-400" : status === "DOWN" ? "bg-red-500" : "bg-cyan-700"}`} />
+      <span className="text-cyan-400/80">{name}</span>
+      <span className={ok ? "text-emerald-400" : status === "DOWN" ? "text-red-400" : "text-cyan-700"}>
         {status || "—"}
       </span>
     </div>
@@ -808,11 +907,11 @@ function StatusPill({ name, status }) {
 function SourceBadge({ name, status }) {
   const ok = status === "OK";
   return (
-    <div className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
-      <span className="text-xs text-zinc-300">{name}</span>
+    <div className="flex items-center justify-between py-1 border-b border-cyan-500/10 last:border-0">
+      <span className="font-mono text-[10px] tracking-wider text-cyan-200">{name}</span>
       <div className="flex items-center gap-1.5">
-        <div className={`w-1.5 h-1.5 rounded-full ${ok ? "bg-emerald-400" : status === "DOWN" ? "bg-red-500" : "bg-zinc-600"}`} />
-        <span className={`font-mono text-[10px] ${ok ? "text-emerald-400" : status === "DOWN" ? "text-red-400" : "text-zinc-500"}`}>
+        <div className={`w-1.5 h-1.5 ${ok ? "bg-emerald-400" : status === "DOWN" ? "bg-red-500" : "bg-cyan-700"}`} />
+        <span className={`font-mono text-[9px] tracking-wider ${ok ? "text-emerald-400" : status === "DOWN" ? "text-red-400" : "text-cyan-700"}`}>
           {status || "—"}
         </span>
       </div>
