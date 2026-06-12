@@ -5,6 +5,7 @@
 import React from "react";
 import { Radio } from "lucide-react";
 import { KIND_ICON, KIND_LABEL, SEV_COLOR, pad } from "@/lib/hudConstants";
+import { statusBg } from "@/lib/styleHelpers";
 
 export function KPI({ label, value, accent = "text-cyan-100", small = false, last = false }) {
   return (
@@ -106,27 +107,25 @@ export function Tel({ label, value, accent = false }) {
 
 export function StatusPill({ name, status }) {
   const ok = status === "OK";
+  const textColor = ok ? "text-emerald-400" : status === "DOWN" ? "text-red-400" : "text-cyan-700";
   return (
     <div className="flex items-center gap-1.5" data-testid={`status-${name.toLowerCase().replace(/\s/g, "-").replace(".", "-")}`}>
-      <div className={`w-1.5 h-1.5 ${ok ? "bg-emerald-400" : status === "DOWN" ? "bg-red-500" : "bg-cyan-700"}`} />
+      <div className={`w-1.5 h-1.5 ${statusBg(status)}`} />
       <span className="text-cyan-400/80">{name}</span>
-      <span className={ok ? "text-emerald-400" : status === "DOWN" ? "text-red-400" : "text-cyan-700"}>
-        {status || "—"}
-      </span>
+      <span className={textColor}>{status || "—"}</span>
     </div>
   );
 }
 
 export function SourceBadge({ name, status }) {
   const ok = status === "OK";
+  const textColor = ok ? "text-emerald-400" : status === "DOWN" ? "text-red-400" : "text-cyan-700";
   return (
     <div className="flex items-center justify-between py-1 border-b border-cyan-500/10 last:border-0">
       <span className="font-mono text-[10px] tracking-wider text-cyan-200">{name}</span>
       <div className="flex items-center gap-1.5">
-        <div className={`w-1.5 h-1.5 ${ok ? "bg-emerald-400" : status === "DOWN" ? "bg-red-500" : "bg-cyan-700"}`} />
-        <span className={`font-mono text-[9px] tracking-wider ${ok ? "text-emerald-400" : status === "DOWN" ? "text-red-400" : "text-cyan-700"}`}>
-          {status || "—"}
-        </span>
+        <div className={`w-1.5 h-1.5 ${statusBg(status)}`} />
+        <span className={`font-mono text-[9px] tracking-wider ${textColor}`}>{status || "—"}</span>
       </div>
     </div>
   );

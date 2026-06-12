@@ -6,7 +6,8 @@ import React, { useEffect, useState, useCallback } from "react";
 import {
   Bike, Car, Train, X, ExternalLink, Loader2, Zap, MapPin,
 } from "lucide-react";
-import { fetchMobilityStations, fetchRideDeeplinks, fetchUberEstimates } from "@/lib/api";
+import { fetchMobilityStations, fetchRideDeeplinks } from "@/lib/api";
+import UberFareTable from "@/components/UberFareTable";
 
 function StationRow({ s, onPick }) {
   const lowBikes = s.bikes <= 1;
@@ -62,21 +63,6 @@ export default function MobilityHub({ lat, lon, toLat, toLon, onClose, onPickSta
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("bicis");
   const [radius, setRadius] = useState(2);
-  const [uberEst, setUberEst] = useState(null);
-  const [uberLoading, setUberLoading] = useState(false);
-
-  const loadUber = useCallback(async () => {
-    if (!toLat || !toLon) { setUberEst(null); return; }
-    setUberLoading(true);
-    try {
-      const d = await fetchUberEstimates(lat, lon, toLat, toLon);
-      setUberEst(d);
-    } catch (e) {
-      console.debug("Uber est fail", e);
-    } finally { setUberLoading(false); }
-  }, [lat, lon, toLat, toLon]);
-
-  useEffect(() => { if (tab === "ride") loadUber(); }, [tab, loadUber]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -169,37 +155,7 @@ export default function MobilityHub({ lat, lon, toLat, toLon, onClose, onPickSta
 
       {tab === "ride" && (
         <div className="px-3 py-3 space-y-2">
-          {/* UBER price/time grid */}
-          {toLat && toLon && (
-            <div className="border border-cyan-500/20" data-testid="uber-grid">
-              <div className="flex items-center justify-between px-2 py-1 bg-cyan-500/5 border-b border-cyan-500/15">
-                <span className="font-mono text-[10px] tracking-[0.2em] text-cyan-300">UBER · TARIFAS</span>
-                <span className="font-mono text-[9px] text-cyan-600">
-                  {uberEst?.distance_km ? `${uberEst.distance_km}km · ~${uberEst.duration_min}min` : ""}
-                </span>
-              </div>
-              {uberLoading && (
-                <div className="px-2 py-3 font-mono text-[10px] text-cyan-500/80 flex items-center gap-2">
-                  <Loader2 className="w-3 h-3 animate-spin" /> Calculando…
-                </div>
-              )}
-              {!uberLoading && uberEst?.prices?.map((p) => (
-                <div key={p.product} className="flex items-center gap-2 px-2 py-1.5 border-b border-cyan-500/10 last:border-0 atlantis-row">
-                  <img src={p.image} alt={p.product} className="w-8 h-5 object-contain bg-white/5 rounded-sm" onError={(e) => { e.target.style.display = "none"; }} />
-                  <div className="flex-1 min-w-0">
-                    <div className="font-mono text-[11px] font-semibold text-cyan-100 truncate">{p.product}</div>
-                    <div className="font-mono text-[9px] text-cyan-500">{p.capacity} pax · ETA ~{p.duration_min || "?"}min</div>
-                  </div>
-                  <div className="font-mono text-xs font-semibold text-amber-300 tabular-nums">{p.estimate || `${p.low_estimate}-${p.high_estimate} €`}</div>
-                </div>
-              ))}
-              {uberEst?.mode === "fare-estimation" && (
-                <div className="px-2 py-1.5 bg-amber-500/5 border-t border-amber-500/20 font-mono text-[9px] text-amber-200/80 leading-snug">
-                  ▸ ESTIMACIÓN basada en tarifas públicas Uber España · Precio final en la app
-                </div>
-              )}
-            </div>
-          )}
+          <UberFareTable lat={lat} lon={lon} toLat={toLat} toLon={toLon} />
           {!toLat && (
             <div className="px-2 py-1.5 bg-amber-500/10 border border-amber-500/30 font-mono text-[10px] tracking-wider text-amber-200">
               💡 Para ver tarifas en vivo de Uber, abre el panel RUTA y define un destino.

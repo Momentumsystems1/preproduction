@@ -10,6 +10,7 @@ import { STYLES } from "@/lib/mapStyles";
 import { fetchEvents, fetchParking, fetchCities, fetchHealth, geocode, fetchRoute, azureTileUrl, fetchMobilityStations } from "@/lib/api";
 import { KIND_ICON, KIND_GLYPH, KIND_LABEL, SEV_COLOR, SUBROUTINES, fmtTime, pad } from "@/lib/hudConstants";
 import { KPI, EventRow, EventDetail, StatusPill, SourceBadge } from "@/components/HudPrimitives";
+import { riskColor } from "@/lib/styleHelpers";
 import RoutePanel from "@/components/RoutePanel";
 import BottomDock from "@/components/BottomDock";
 import { AzureToolbar, WeatherChip, EVPanel } from "@/components/AzureStack";
@@ -1055,7 +1056,7 @@ export default function CommandCenter() {
             </div>
             <div>
               <div className="font-mono text-[8px] tracking-[0.22em] text-cyan-500/80">RIESGO</div>
-              <div className={`font-mono text-3xl tabular-nums ${eventsData.risk === "ALTO" ? "text-red-400" : eventsData.risk === "MEDIO" ? "text-amber-400" : "text-emerald-400"}`}>{eventsData.risk}</div>
+              <div className={`font-mono text-3xl tabular-nums ${riskColor(eventsData.risk)}`}>{eventsData.risk}</div>
             </div>
             <div>
               <div className="font-mono text-[8px] tracking-[0.22em] text-cyan-500/80">CRÍT</div>
@@ -1075,8 +1076,7 @@ export default function CommandCenter() {
         {/* KPI grid (Atlantis style: numeric heavy) */}
         <div className="grid grid-cols-3 border-b border-cyan-500/15" data-testid="kpi-grid">
           <KPI label="SITREC" value={pad(kpi.count)} accent="text-cyan-100" />
-          <KPI label="RISK" value={kpi.risk}
-               accent={kpi.risk === "ALTO" ? "text-red-400" : kpi.risk === "MEDIO" ? "text-amber-400" : "text-emerald-400"} />
+          <KPI label="RISK" value={kpi.risk} accent={riskColor(kpi.risk)} />
           <KPI label="LAYER" value={STYLES[mapStyle].label.toUpperCase()} accent="text-cyan-200" small />
           <KPI label="CRIT" value={pad(kpi.critical, 3)} accent="text-red-400" small />
           <KPI label="WARN" value={pad(kpi.warning, 3)} accent="text-amber-400" small />

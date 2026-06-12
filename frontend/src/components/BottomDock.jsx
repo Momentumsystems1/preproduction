@@ -6,14 +6,13 @@
 import React from "react";
 import { Tel } from "@/components/HudPrimitives";
 import { KIND_LABEL, SEV_COLOR, fmtTime, pad } from "@/lib/hudConstants";
+import { logColor } from "@/lib/styleHelpers";
 
 function LogRow({ entry }) {
   return (
     <div className="flex gap-2 anim-fade-up" style={{ animationDuration: "180ms" }}>
       <span className="text-cyan-700 tabular-nums shrink-0">{fmtTime(entry.t)}</span>
-      <span className={entry.kind === "err" ? "text-red-400" : entry.kind === "ok" ? "text-emerald-400" : "text-cyan-300"}>
-        {entry.msg}
-      </span>
+      <span className={logColor(entry.kind)}>{entry.msg}</span>
     </div>
   );
 }

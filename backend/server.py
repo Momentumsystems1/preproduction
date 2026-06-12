@@ -894,6 +894,65 @@ async def mobility_networks(country: str = Query("ES")):
     return {"count": len(nets), "networks": nets}
 
 
+def _filter_nearby_networks(networks: List[Dict[str, Any]],
+                             lat: float, lon: float, radius_km: float) -> List[Dict[str, Any]]:
+    """Return only the GBFS networks whose city center sits within ~30 km buffer
+    of the request point (the buffer compensates for cities larger than radius)."""
+    nearby = []
+    for n in networks:
+        loc = n.get("location", {}) or {}
+        nlat = loc.get("latitude")
+        nlon = loc.get("longitude")
+        if nlat is None or nlon is None:
+            continue
+        if _km_between(lat, lon, nlat, nlon) <= radius_km + 30:
+            nearby.append(n)
+    return nearby
+
+
+def _station_from_citybikes(s: Dict[str, Any], net_id: str, net_meta: Dict[str, Any],
+                             lat: float, lon: float) -> Optional[Dict[str, Any]]:
+    """Convert a CityBikes station entry to our normalized station schema."""
+    slat = s.get("latitude")
+    slon = s.get("longitude")
+    if slat is None or slon is None:
+        return None
+    ex = s.get("extra") or {}
+    company = net_meta.get("company")
+    network_name = net_meta.get("name") or (company[0] if isinstance(company, list) and company else company)
+    return {
+        "id": f"{net_id}::{s.get('id')}",
+        "network": net_id,
+        "network_name": network_name,
+        "name": s.get("name"),
+        "lat": slat, "lon": slon,
+        "bikes": s.get("free_bikes") or 0,
+        "slots": s.get("empty_slots") or 0,
+        "ebikes": ex.get("ebikes") or ex.get("normal_ebikes") or 0,
+        "address": ex.get("address"),
+        "distance_m": int(_km_between(lat, lon, slat, slon) * 1000),
+        "online": ex.get("online", True),
+    }
+
+
+async def _fetch_citybikes_network(net_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch + cache a single CityBikes network detail (with all its stations)."""
+    key = f"cb_net_{net_id}"
+    cached = cache_get(key, ttl=60)
+    if cached:
+        return cached
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(f"{CITYBIKES}/networks/{net_id}", headers={"User-Agent": UA})
+            if r.status_code == 200:
+                data = r.json()
+                cache_set(key, data)
+                return data
+    except httpx.RequestError:
+        return None
+    return None
+
+
 @mobility_router.get("/stations")
 async def mobility_stations_near(
     lat: float, lon: float,
@@ -903,50 +962,18 @@ async def mobility_stations_near(
     """Return all bike-share / scooter stations within radius_km of (lat,lon)
     across every GBFS-compatible network in the requested country."""
     nets_data = await mobility_networks(country=country)
-    nearby_nets = []
-    for n in nets_data.get("networks", []):
-        loc = n.get("location", {}) or {}
-        if "latitude" in loc and "longitude" in loc:
-            if _km_between(lat, lon, loc["latitude"], loc["longitude"]) <= radius_km + 30:
-                nearby_nets.append(n)
+    nearby_nets = _filter_nearby_networks(nets_data.get("networks", []), lat, lon, radius_km)
 
     async def fetch_one(net_id: str) -> List[Dict[str, Any]]:
-        key = f"cb_net_{net_id}"
-        d = cache_get(key, ttl=60)
-        if not d:
-            try:
-                async with httpx.AsyncClient(timeout=15) as c:
-                    r = await c.get(f"{CITYBIKES}/networks/{net_id}", headers={"User-Agent": UA})
-                    if r.status_code == 200:
-                        d = r.json()
-                        cache_set(key, d)
-            except httpx.RequestError:
-                return []
-        if not d:
+        data = await _fetch_citybikes_network(net_id)
+        if not data:
             return []
+        net_meta = data.get("network", {})
         out = []
-        net_meta = d.get("network", {})
         for s in net_meta.get("stations", []):
-            slat, slon = s.get("latitude"), s.get("longitude")
-            if slat is None or slon is None:
-                continue
-            dist = _km_between(lat, lon, slat, slon)
-            if dist > radius_km:
-                continue
-            ex = s.get("extra", {}) or {}
-            out.append({
-                "id": f"{net_id}::{s.get('id')}",
-                "network": net_id,
-                "network_name": net_meta.get("name") or net_meta.get("company", ["?"])[0] if isinstance(net_meta.get("company"), list) else net_meta.get("company"),
-                "name": s.get("name"),
-                "lat": slat, "lon": slon,
-                "bikes": s.get("free_bikes") or 0,
-                "slots": s.get("empty_slots") or 0,
-                "ebikes": ex.get("ebikes") or ex.get("normal_ebikes") or 0,
-                "address": ex.get("address"),
-                "distance_m": int(dist * 1000),
-                "online": ex.get("online", True),
-            })
+            station = _station_from_citybikes(s, net_id, net_meta, lat, lon)
+            if station and station["distance_m"] <= radius_km * 1000:
+                out.append(station)
         return out
 
     results = await asyncio.gather(*(fetch_one(n["id"]) for n in nearby_nets), return_exceptions=True)
