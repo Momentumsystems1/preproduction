@@ -1,51 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import maplibregl from "maplibre-gl";
 import {
-  Radio, AlertTriangle, Construction, OctagonAlert, TrendingUp, Layers, Ruler,
-  SquareParking, Search, RotateCw, Mountain, Satellite, Map as MapIcon,
-  Activity, Crosshair, Power, CloudRain, Loader2, Eye, X, ChevronRight, Hexagon,
-  Flame, Download, Route, FileText, FileJson, Navigation2,
+  Radio, Layers, Ruler, SquareParking, Search, RotateCw, Mountain, Satellite,
+  Map as MapIcon, Activity, Crosshair, Loader2, Eye, X, Hexagon,
+  Flame, Download, Route, FileText, FileJson,
 } from "lucide-react";
 
 import { STYLES } from "@/lib/mapStyles";
 import { fetchEvents, fetchParking, fetchCities, fetchHealth, geocode, fetchRoute } from "@/lib/api";
+import { KIND_ICON, KIND_GLYPH, KIND_LABEL, SEV_COLOR, SUBROUTINES, fmtTime, pad } from "@/lib/hudConstants";
+import { KPI, EventRow, EventDetail, Tel, StatusPill, SourceBadge } from "@/components/HudPrimitives";
+import RoutePanel from "@/components/RoutePanel";
 import jsPDF from "jspdf";
-
-const KIND_ICON = {
-  obras: Construction,
-  accidente: AlertTriangle,
-  congestion: TrendingUp,
-  peligro: OctagonAlert,
-  meteo: CloudRain,
-  incidencia: Radio,
-};
-
-const KIND_GLYPH = { obras: "!", accidente: "X", congestion: "≋", peligro: "▲", meteo: "~", incidencia: "i" };
-const KIND_LABEL = { obras: "OBRAS", accidente: "ACCIDENTE", congestion: "CONGESTIÓN", peligro: "PELIGRO", meteo: "METEO", incidencia: "INCIDENCIA" };
-const SEV_COLOR = { critical: "var(--accidente)", warning: "var(--obras)", info: "var(--cyan)" };
-
-const SUBROUTINES = [
-  ["GTF-001", "DATEX2 STREAM",        "ACTIVE"],
-  ["GTF-002", "SCT FEED",             "ACTIVE"],
-  ["GTF-003", "MADRID KML",           "ACTIVE"],
-  ["GTF-004", "OSM OVERPASS",         "STANDBY"],
-  ["GTF-005", "NOMINATIM GEOCODE",    "STANDBY"],
-  ["GTF-006", "MAPTILE RASTER",       "ACTIVE"],
-  ["GTF-007", "TERRAIN RGB",          "STANDBY"],
-  ["GTF-008", "EVENT CLASSIFIER",     "ACTIVE"],
-  ["GTF-009", "SEVERITY MATRIX",      "ACTIVE"],
-  ["GTF-010", "GEOSPATIAL FILTER",    "ACTIVE"],
-  ["GTF-011", "PARKING AGGREGATOR",   "STANDBY"],
-  ["GTF-012", "ROUTE OPTIMIZER",      "ACTIVE"],
-  ["GTF-013", "DENSITY HEATMAP",      "STANDBY"],
-  ["GTF-014", "EXPORT ENGINE",        "ACTIVE"],
-];
-
-function fmtTime(d) {
-  if (!d) return "--:--:--";
-  return d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
-function pad(n, w = 4) { return String(n).padStart(w, "0"); }
 
 export default function CommandCenter() {
   const mapRef = useRef(null);
@@ -141,9 +107,13 @@ export default function CommandCenter() {
         try {
           map.setTerrain({ source: "terrain-rgb", exaggeration: 1.4 });
           map.easeTo({ pitch: 60, bearing: -17, duration: 1200 });
-        } catch (e) { /* terrain unavailable */ }
+        } catch (e) {
+          console.warn("setTerrain failed (3D unavailable):", e);
+        }
       } else {
-        try { map.setTerrain(null); } catch (e) { /* no terrain */ }
+        try { map.setTerrain(null); } catch (e) {
+          console.warn("setTerrain(null) failed:", e);
+        }
         map.easeTo({ pitch: 0, bearing: 0, duration: 800 });
       }
       renderEventMarkers(eventsData);
@@ -212,7 +182,9 @@ export default function CommandCenter() {
       const el = document.createElement("div");
       el.className = `mrc-marker kind-${f.kind}`;
       el.setAttribute("data-testid", `event-marker-${f.id}`);
-      el.innerHTML = `<span>${KIND_GLYPH[f.kind] || "?"}</span>`;
+      const glyphSpan = document.createElement("span");
+      glyphSpan.textContent = KIND_GLYPH[f.kind] || "?";
+      el.appendChild(glyphSpan);
       el.addEventListener("click", (ev) => {
         ev.stopPropagation();
         setSelected(f);
@@ -221,12 +193,23 @@ export default function CommandCenter() {
       });
       el.addEventListener("mouseenter", () => {
         if (hoverPopupRef.current) hoverPopupRef.current.remove();
+        const popupNode = document.createElement("div");
+        const src = document.createElement("div");
+        src.style.cssText = "font-family:'IBM Plex Mono',monospace;font-size:10px;color:#22d3ee;text-transform:uppercase;letter-spacing:0.18em;";
+        src.textContent = `▸ ${f.source}`;
+        const title = document.createElement("div");
+        title.style.cssText = "font-weight:600;font-size:13px;margin-top:4px;color:#e0f2fe";
+        title.textContent = KIND_LABEL[f.kind] || "INCIDENCIA";
+        const road = document.createElement("div");
+        road.style.cssText = "color:#7dd3fc;font-size:12px;margin-top:2px;font-family:'IBM Plex Mono',monospace";
+        road.textContent = f.road || "";
+        const idDiv = document.createElement("div");
+        idDiv.style.cssText = "color:#4a8ab4;font-size:10px;margin-top:4px;font-family:'IBM Plex Mono',monospace";
+        idDiv.textContent = `ID ${f.id}`;
+        popupNode.append(src, title, road, idDiv);
         hoverPopupRef.current = new maplibregl.Popup({ closeButton: false, className: "mrc-popup", offset: 18 })
           .setLngLat([f.lon, f.lat])
-          .setHTML(`<div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--cyan,#22d3ee);text-transform:uppercase;letter-spacing:0.18em;">▸ ${f.source}</div>
-                    <div style="font-weight:600;font-size:13px;margin-top:4px;color:#e0f2fe">${KIND_LABEL[f.kind] || "INCIDENCIA"}</div>
-                    <div style="color:#7dd3fc;font-size:12px;margin-top:2px;font-family:'IBM Plex Mono',monospace">${f.road || ""}</div>
-                    <div style="color:#4a8ab4;font-size:10px;margin-top:4px;font-family:'IBM Plex Mono',monospace">ID ${f.id}</div>`)
+          .setDOMContent(popupNode)
           .addTo(map);
       });
       el.addEventListener("mouseleave", () => {
@@ -252,7 +235,9 @@ export default function CommandCenter() {
       const el = document.createElement("div");
       el.className = "mrc-marker parking";
       el.setAttribute("data-testid", `parking-marker-${p.id}`);
-      el.innerHTML = `<span>P</span>`;
+      const pSpan = document.createElement("span");
+      pSpan.textContent = "P";
+      el.appendChild(pSpan);
       el.addEventListener("click", (ev) => {
         ev.stopPropagation();
         setSelected({
@@ -868,71 +853,16 @@ export default function CommandCenter() {
 
       {/* ===== ROUTE OPTIMIZER PANEL ===== */}
       {showRoutePanel && (
-        <div className="absolute top-[150px] left-1/2 -translate-x-1/2 z-[55] w-[460px] panel-solid brackets anim-fade-up" data-testid="route-panel">
-          <div className="section-head">
-            <span>ROUTE OPTIMIZER · OSRM</span>
-            <button onClick={() => { setShowRoutePanel(false); clearRoute(); }} className="text-cyan-300/60 hover:text-cyan-100">
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-          <div className="px-3 py-3 space-y-2">
-            <div>
-              <label className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 block mb-1">ORIGIN</label>
-              <input data-testid="route-from" value={routeFrom} onChange={(e) => setRouteFrom(e.target.value)}
-                placeholder="dirección, ciudad o 'lat,lon'"
-                className="w-full bg-cyan-500/5 border border-cyan-500/25 px-2 py-1.5 text-xs font-mono outline-none text-cyan-100 placeholder:text-cyan-700/70" />
-            </div>
-            <div>
-              <label className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 block mb-1">DESTINATION</label>
-              <input data-testid="route-to" value={routeTo} onChange={(e) => setRouteTo(e.target.value)}
-                placeholder="dirección, ciudad o 'lat,lon'"
-                className="w-full bg-cyan-500/5 border border-cyan-500/25 px-2 py-1.5 text-xs font-mono outline-none text-cyan-100 placeholder:text-cyan-700/70" />
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="flex-1">
-                <label className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 block mb-1">VEHICLE PROFILE</label>
-                <select data-testid="route-mode" value={routeMode} onChange={(e) => setRouteMode(e.target.value)}
-                  className="w-full bg-cyan-500/5 border border-cyan-500/25 px-2 py-1.5 text-xs font-mono outline-none text-cyan-100 cursor-pointer">
-                  <option value="car" className="bg-[#020a14]">CAR · 120 g CO₂/km</option>
-                  <option value="truck" className="bg-[#020a14]">TRUCK · 280 g CO₂/km</option>
-                  <option value="bike" className="bg-[#020a14]">BIKE · 0 g CO₂/km</option>
-                  <option value="foot" className="bg-[#020a14]">FOOT · 0 g CO₂/km</option>
-                </select>
-              </div>
-              <button data-testid="route-run" onClick={runRoute} disabled={routeLoading}
-                className="self-end flex items-center gap-1.5 px-3 py-1.5 bg-cyan-400 text-[#020a14] hover:bg-cyan-300 disabled:opacity-50 text-[11px] font-mono tracking-wider font-bold">
-                {routeLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Navigation2 className="w-3 h-3" />}
-                {routeLoading ? "RUN..." : "OPTIMIZE"}
-              </button>
-              <button data-testid="route-clear" onClick={() => { clearRoute(); setRouteFrom(""); setRouteTo(""); }}
-                className="self-end px-2 py-1.5 bg-transparent border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10 text-[10px] font-mono tracking-wider">
-                CLR
-              </button>
-            </div>
-
-            {routeResult && !routeResult.error && (
-              <div className="mt-2 grid grid-cols-3 gap-2 border-t border-cyan-500/15 pt-3">
-                <div>
-                  <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80">DISTANCE</div>
-                  <div className="font-mono text-lg text-cyan-100 tabular-nums">{routeResult.distance_km}<span className="text-[10px] text-cyan-500"> km</span></div>
-                </div>
-                <div>
-                  <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80">ETA</div>
-                  <div className="font-mono text-lg text-amber-300 tabular-nums">{routeResult.duration_min}<span className="text-[10px] text-cyan-500"> min</span></div>
-                </div>
-                <div>
-                  <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80">CO₂ EST.</div>
-                  <div className="font-mono text-lg text-emerald-300 tabular-nums">{routeResult.co2_g}<span className="text-[10px] text-cyan-500"> g</span></div>
-                </div>
-              </div>
-            )}
-            {routeResult && routeResult.error && (
-              <div className="mt-2 px-2 py-1.5 bg-red-500/10 border border-red-500/30 font-mono text-[10px] tracking-wider text-red-300">
-                ▸ {routeResult.error}
-              </div>
-            )}
-          </div>
-        </div>
+        <RoutePanel
+          routeFrom={routeFrom} setRouteFrom={setRouteFrom}
+          routeTo={routeTo} setRouteTo={setRouteTo}
+          routeMode={routeMode} setRouteMode={setRouteMode}
+          routeResult={routeResult}
+          routeLoading={routeLoading}
+          onRun={runRoute}
+          onClear={() => { clearRoute(); setRouteFrom(""); setRouteTo(""); }}
+          onClose={() => { setShowRoutePanel(false); clearRoute(); }}
+        />
       )}
 
       {/* ===== LEFT PANEL ===== */}
@@ -1014,7 +944,7 @@ export default function CommandCenter() {
                   {Array.from({ length: 36 }).map((_, i) => {
                     const active = (i + (eventsData?.count || 0)) % 3 !== 0;
                     return (
-                      <div key={i}
+                      <div key={`chev-cell-${i}`}
                            className="aspect-square border"
                            style={{
                              background: active ? "rgba(34,211,238,0.5)" : "rgba(34,211,238,0.08)",
@@ -1161,134 +1091,6 @@ export default function CommandCenter() {
           <div className="mt-2 font-mono text-[10px] tracking-[0.3em] text-cyan-600">RUNNING DIAGNOSTICS · ALPHA V.2</div>
         </div>
       )}
-    </div>
-  );
-}
-
-/* ===== Sub-components ===== */
-
-function KPI({ label, value, accent = "text-cyan-100", small = false, last = false }) {
-  return (
-    <div className={`px-3 py-2 border-b border-cyan-500/15 ${!last ? "border-r" : ""}`}>
-      <div className="font-mono text-[8px] tracking-[0.25em] text-cyan-500/80 mb-0.5">{label}</div>
-      <div className={`font-mono ${small ? "text-sm" : "text-xl"} font-semibold tabular-nums ${accent}`}>{value}</div>
-    </div>
-  );
-}
-
-function EventRow({ f, idx, active, onClick }) {
-  const Icon = KIND_ICON[f.kind] || Radio;
-  const color = SEV_COLOR[f.severity] || "var(--cyan)";
-  return (
-    <button
-      data-testid={`event-row-${f.id}`}
-      onClick={onClick}
-      className={`w-full text-left flex items-center gap-2 px-2 py-1.5 border-b border-cyan-500/8 atlantis-row ${active ? "bg-cyan-500/15" : ""}`}
-      style={{ borderLeft: `2px solid ${color}` }}
-    >
-      <span className="font-mono text-[10px] text-cyan-700 tabular-nums w-7 text-right">{pad(idx + 1, 3)}</span>
-      <Icon className="w-3 h-3 flex-shrink-0" style={{ color }} />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between gap-2">
-          <span className="font-mono text-[11px] font-semibold tracking-wide text-cyan-100">{KIND_LABEL[f.kind] || "INCIDENCIA"}</span>
-          <span className="font-mono text-[9px] text-cyan-600">{f.source.split(" ")[0]}</span>
-        </div>
-        <div className="font-mono text-[10px] text-cyan-300/80 truncate">{f.road || f.id}</div>
-      </div>
-    </button>
-  );
-}
-
-function EventDetail({ f, onClose }) {
-  const Icon = KIND_ICON[f.kind] || Radio;
-  const color = SEV_COLOR[f.severity] || "var(--cyan)";
-  return (
-    <div className="anim-fade-up" data-testid="event-detail">
-      <div className="px-3 py-3 border-b border-cyan-500/15">
-        <div className="flex items-start gap-3">
-          <div className="w-10 h-10 flex items-center justify-center border" style={{ borderColor: color, background: `${color}1A` }}>
-            <Icon className="w-5 h-5" style={{ color }} />
-          </div>
-          <div className="flex-1">
-            <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80">REC · {f.id}</div>
-            <div className="font-display font-semibold text-base text-cyan-100 mt-0.5 tracking-wide">{KIND_LABEL[f.kind] || f.title}</div>
-            <div className="font-mono text-[10px] text-cyan-400 tracking-wider mt-0.5">{f.source}</div>
-          </div>
-        </div>
-      </div>
-
-      <div className="px-3 py-2 space-y-2 border-b border-cyan-500/15">
-        {f.road && <Field label="VECTOR / ROAD">{f.road}</Field>}
-        <Field label="ANALYSIS">{f.description}</Field>
-        <div className="grid grid-cols-2 gap-2">
-          <Field label="LATITUDE" mono>{f.lat?.toFixed(5)}</Field>
-          <Field label="LONGITUDE" mono>{f.lon?.toFixed(5)}</Field>
-        </div>
-        <Field label="SEVERITY">
-          <span className="px-2 py-0.5 text-[10px] font-mono tracking-[0.18em]"
-                style={{ background: `${color}1F`, color, border: `1px solid ${color}80` }}>
-            {(f.severity || "info").toUpperCase()}
-          </span>
-        </Field>
-      </div>
-
-      <div className="px-3 py-2 grid grid-cols-2 gap-2">
-        <a data-testid="event-gmaps" target="_blank" rel="noreferrer"
-           href={`https://www.google.com/maps/dir/?api=1&destination=${f.lat},${f.lon}`}
-           className="text-center px-2 py-1.5 bg-cyan-500/10 border border-cyan-500/40 hover:bg-cyan-500/20 text-[10px] font-mono tracking-wider text-cyan-100">
-          ROUTE TO TARGET
-        </a>
-        <button data-testid="event-close" onClick={onClose}
-          className="px-2 py-1.5 bg-transparent border border-cyan-500/40 hover:bg-cyan-500/10 text-[10px] font-mono tracking-wider text-cyan-100">
-          DISENGAGE
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function Field({ label, children, mono = false }) {
-  return (
-    <div>
-      <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 mb-0.5">{label}</div>
-      <div className={mono ? "font-mono text-[12px] text-cyan-100" : "text-[12px] text-cyan-100/90 leading-snug"}>{children}</div>
-    </div>
-  );
-}
-
-function Tel({ label, value, accent = false }) {
-  return (
-    <div className="flex items-center justify-between border-b border-cyan-500/10 pb-1">
-      <span className="text-cyan-500/80 tracking-wider">{label}</span>
-      <span className={`tabular-nums ${accent ? "text-cyan-300" : "text-cyan-100"}`}>{value || "—"}</span>
-    </div>
-  );
-}
-
-function StatusPill({ name, status }) {
-  const ok = status === "OK";
-  return (
-    <div className="flex items-center gap-1.5" data-testid={`status-${name.toLowerCase().replace(/\s/g, '-').replace('.','-')}`}>
-      <div className={`w-1.5 h-1.5 ${ok ? "bg-emerald-400" : status === "DOWN" ? "bg-red-500" : "bg-cyan-700"}`} />
-      <span className="text-cyan-400/80">{name}</span>
-      <span className={ok ? "text-emerald-400" : status === "DOWN" ? "text-red-400" : "text-cyan-700"}>
-        {status || "—"}
-      </span>
-    </div>
-  );
-}
-
-function SourceBadge({ name, status }) {
-  const ok = status === "OK";
-  return (
-    <div className="flex items-center justify-between py-1 border-b border-cyan-500/10 last:border-0">
-      <span className="font-mono text-[10px] tracking-wider text-cyan-200">{name}</span>
-      <div className="flex items-center gap-1.5">
-        <div className={`w-1.5 h-1.5 ${ok ? "bg-emerald-400" : status === "DOWN" ? "bg-red-500" : "bg-cyan-700"}`} />
-        <span className={`font-mono text-[9px] tracking-wider ${ok ? "text-emerald-400" : status === "DOWN" ? "text-red-400" : "text-cyan-700"}`}>
-          {status || "—"}
-        </span>
-      </div>
     </div>
   );
 }

@@ -22,6 +22,10 @@ from datetime import datetime, timezone
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="Momentum Road Command Center API")
 api_router = APIRouter(prefix="/api")
 
@@ -46,7 +50,7 @@ async def fetch_text(url: str, timeout: float = 18.0, headers: Optional[dict] = 
     if headers:
         h.update(headers)
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, verify=False) as c:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as c:
             if method == "POST":
                 r = await c.post(url, content=data, headers=h)
             else:
@@ -250,7 +254,7 @@ async def fetch_parking(lat: float, lon: float, radius: int = 1500) -> Dict[str,
     body = "data=" + httpx.QueryParams({"data": q}).get("data", "")
     # Easier: use raw form
     try:
-        async with httpx.AsyncClient(timeout=18, verify=False) as c:
+        async with httpx.AsyncClient(timeout=18) as c:
             r = await c.post(OVERPASS_URL, data={"data": q}, headers={"User-Agent": UA})
             if r.status_code != 200:
                 return {"status": "HTTP_ERROR", "features": []}
@@ -303,7 +307,7 @@ async def geocode(q: str) -> Optional[Dict[str, float]]:
     if cached:
         return cached
     try:
-        async with httpx.AsyncClient(timeout=12, verify=False) as c:
+        async with httpx.AsyncClient(timeout=12) as c:
             r = await c.get(NOMINATIM_URL,
                             params={"q": q, "format": "json", "limit": 1, "accept-language": "es"},
                             headers={"User-Agent": UA})
@@ -457,7 +461,7 @@ async def route(
     base = OSRM_PROFILE.get(mode, OSRM_PROFILE["car"])
     url = f"{base}/{a['lon']},{a['lat']};{b['lon']},{b['lat']}?overview=full&geometries=geojson&steps=false&alternatives=false"
     try:
-        async with httpx.AsyncClient(timeout=18, verify=False) as c:
+        async with httpx.AsyncClient(timeout=18) as c:
             r = await c.get(url, headers={"User-Agent": UA})
             if r.status_code != 200:
                 raise HTTPException(status_code=502, detail=f"OSRM returned {r.status_code}")
@@ -489,7 +493,7 @@ async def route(
 async def health():
     async def check(url):
         try:
-            async with httpx.AsyncClient(timeout=8, verify=False) as c:
+            async with httpx.AsyncClient(timeout=8) as c:
                 r = await c.head(url)
                 return r.status_code < 500
         except Exception:
@@ -517,7 +521,3 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
