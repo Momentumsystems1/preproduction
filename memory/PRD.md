@@ -42,10 +42,21 @@ Refactor of an existing tool that connects to DATEX DGT 3.0 and Servei Català d
   - Diamond-shaped event markers, color-coded by kind, hover popup, click to select
   - Corner brackets, scanline overlay, radar sweep loading state, dotted measure line
 
+### Update 2026-06-12 (multimodal trip planner)
+- New endpoint **`/api/multimodal/plan`** ranks up to 4 trip combinations by fastest:
+  - 100% car (with live Azure traffic delay)
+  - Car → parking → walk
+  - Car → parking → transit (Google Transit deep-link)
+  - 100% transit (deep-link)
+- Switched parking discovery from Azure category POI (7311 returned 0 results) to Azure fuzzy POI search → 3+ Madrid parkings now resolved (Carmen, Plaza de Oriente, El Corte Inglés).
+- Event markers migrated from HTML markers to native MapLibre GeoJSON layers (`events-circle` + `events-text`) → zero drift on zoom.
+- `RoutePanel` extended with `ALTERNATIVAS MULTIMODALES · AZURE` section showing each option as a card (segments, deeplinks, parkings considered, ★ best, delta_vs_car_min).
+- Clicking a multimodal card draws a dashed polyline on the map in the option color and logs `[MMOD] Selected …`.
+
 ## Testing
-- Backend: 9/9 pytest passed (iteration_1.json)
-- Frontend: 8/8 flows verified via testing agent + manual screenshots
-- All map style switches work; measure, parking, search, filter, refresh all functional
+- Backend: 13/13 pytest passed (iteration_2.json — 9 existing + 4 new multimodal tests)
+- Frontend: 12/12 flows verified via testing agent + manual screenshots
+- All map style switches work; measure, parking, search, filter, refresh, multimodal panel + polyline pick all functional
 
 ## P0 / Done
 - [x] DGT 3.0 real-time events
