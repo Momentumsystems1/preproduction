@@ -5,8 +5,8 @@
  */
 import React from "react";
 import { Tel } from "@/components/HudPrimitives";
-import { KIND_LABEL, SEV_COLOR, fmtTime, pad } from "@/lib/hudConstants";
-import { logColor } from "@/lib/styleHelpers";
+import { KIND_LABEL, fmtTime, pad } from "@/lib/hudConstants";
+import { logColor, severityColor } from "@/lib/styleHelpers";
 
 function LogRow({ entry }) {
   return (
@@ -29,7 +29,7 @@ function TacticalRow({ feature, idx, onClick }) {
       <div className="col-span-2 uppercase" style={{ color: `var(--${feature.kind}, #67e8f9)` }}>
         {KIND_LABEL[feature.kind] || feature.kind}
       </div>
-      <div className="col-span-2" style={{ color: SEV_COLOR[feature.severity] || "#67e8f9" }}>
+      <div className="col-span-2" style={{ color: severityColor(feature.severity) }}>
         {(feature.severity || "info").toUpperCase()}
       </div>
       <div className="col-span-2 text-cyan-300/80">{(feature.source || "").split(" ")[0]}</div>

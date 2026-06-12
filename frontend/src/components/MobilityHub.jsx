@@ -3,6 +3,7 @@
  * + deep-links a apps de ride-hailing (Uber, Cabify, Bolt, FreeNow, Citymapper).
  */
 import React, { useEffect, useState, useCallback } from "react";
+import debug from "@/lib/debug";
 import {
   Bike, Car, Train, X, ExternalLink, Loader2, Zap, MapPin,
 } from "lucide-react";
@@ -74,7 +75,7 @@ export default function MobilityHub({ lat, lon, toLat, toLon, onClose, onPickSta
       setStations(s);
       setLinks(l.links || []);
     } catch (e) {
-      console.debug("MobilityHub load error:", e);
+      debug("MobilityHub load error:", e);
     } finally {
       setLoading(false);
     }

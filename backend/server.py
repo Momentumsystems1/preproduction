@@ -94,6 +94,46 @@ def classify_event(text: str) -> Dict[str, str]:
 # ----------------------------- DGT 3.0 (DATEX2) -----------------------------
 DGT_URL = "https://nap.dgt.es/datex2/v3/dgt/SituationPublication/datex2_v36.xml"
 
+def _extract_dgt_coords(block: str) -> Optional[Tuple[float, float]]:
+    """Pull lat/lon from a DATEX2 situationRecord block. Returns None if missing/invalid."""
+    lat_m = re.search(r"<[^>]*latitude[^>]*>([^<]+)</[^>]+>", block, flags=re.I)
+    lon_m = re.search(r"<[^>]*longitude[^>]*>([^<]+)</[^>]+>", block, flags=re.I)
+    if not lat_m or not lon_m:
+        return None
+    try:
+        lat = float(lat_m.group(1).replace(",", "."))
+        lon = float(lon_m.group(1).replace(",", "."))
+    except ValueError:
+        return None
+    if not lat or not lon:
+        return None
+    return lat, lon
+
+
+def _parse_dgt_record(block: str, idx: int) -> Optional[Dict[str, Any]]:
+    """Convert a single DATEX2 situationRecord XML block into a normalized event dict."""
+    coords = _extract_dgt_coords(block)
+    if not coords:
+        return None
+    lat, lon = coords
+    d_m = re.search(r"<[^>]*(?:comment|description|reason|value)[^>]*>([^<]+)</[^>]+>", block, flags=re.I)
+    desc = clean_text(d_m.group(1)) if d_m else ""
+    r_m = re.search(r"<[^>]*(?:roadName|roadNumber|roadIdentifier)[^>]*>([^<]+)</[^>]+>", block, flags=re.I)
+    road = clean_text(r_m.group(1)) if r_m else ""
+    kind = classify_event(desc + " " + road)
+    return {
+        "id": f"DGT-{idx}",
+        "lat": lat, "lon": lon,
+        "road": road or "DGT",
+        "title": kind["label"],
+        "description": desc or "Evento DGT DATEX2",
+        "kind": kind["kind"],
+        "severity": kind["severity"],
+        "source": "DGT 3.0",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 async def fetch_dgt_events(center_lon: float, center_lat: float, radius_km: float = 150) -> Dict[str, Any]:
     cache_key = "dgt_raw"
     raw = cache_get(cache_key, ttl=90)
@@ -107,42 +147,12 @@ async def fetch_dgt_events(center_lon: float, center_lat: float, radius_km: floa
     features: List[Dict[str, Any]] = []
     blocks = re.findall(r"<[^>]*situationRecord\b.*?</[^>]*situationRecord>", raw, flags=re.S | re.I)
     for idx, block in enumerate(blocks):
-        lat_m = re.search(r"<[^>]*latitude[^>]*>([^<]+)</[^>]+>", block, flags=re.I)
-        lon_m = re.search(r"<[^>]*longitude[^>]*>([^<]+)</[^>]+>", block, flags=re.I)
-        if not lat_m or not lon_m:
+        rec = _parse_dgt_record(block, idx)
+        if not rec:
             continue
-        try:
-            lat = float(lat_m.group(1).replace(",", "."))
-            lon = float(lon_m.group(1).replace(",", "."))
-        except ValueError:
+        if haversine_km(center_lon, center_lat, rec["lon"], rec["lat"]) > radius_km:
             continue
-        if not lat or not lon:
-            continue
-        if haversine_km(center_lon, center_lat, lon, lat) > radius_km:
-            continue
-
-        desc = ""
-        d_m = re.search(r"<[^>]*(?:comment|description|reason|value)[^>]*>([^<]+)</[^>]+>", block, flags=re.I)
-        if d_m:
-            desc = clean_text(d_m.group(1))
-        road = ""
-        r_m = re.search(r"<[^>]*(?:roadName|roadNumber|roadIdentifier)[^>]*>([^<]+)</[^>]+>", block, flags=re.I)
-        if r_m:
-            road = clean_text(r_m.group(1))
-
-        kind = classify_event(desc + " " + road)
-        features.append({
-            "id": f"DGT-{idx}",
-            "lat": lat,
-            "lon": lon,
-            "road": road or "DGT",
-            "title": kind["label"],
-            "description": desc or "Evento DGT DATEX2",
-            "kind": kind["kind"],
-            "severity": kind["severity"],
-            "source": "DGT 3.0",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        features.append(rec)
         if len(features) >= 400:
             break
     return {"status": "OK", "features": features}

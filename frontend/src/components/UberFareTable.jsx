@@ -3,6 +3,7 @@
  * Shows per-product Uber estimates with image + capacity + ETA + price range.
  */
 import React, { useEffect, useState } from "react";
+import debug from "@/lib/debug";
 import { Loader2 } from "lucide-react";
 import { fetchUberEstimates } from "@/lib/api";
 
@@ -37,7 +38,7 @@ export default function UberFareTable({ lat, lon, toLat, toLon }) {
     setLoading(true);
     fetchUberEstimates(lat, lon, toLat, toLon)
       .then((d) => { if (!cancelled) setData(d); })
-      .catch((e) => console.debug("Uber est fail", e))
+      .catch((e) => debug("Uber est fail", e))
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [lat, lon, toLat, toLon]);

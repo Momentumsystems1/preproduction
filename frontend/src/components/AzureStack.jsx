@@ -3,6 +3,7 @@
  * Talks to backend /api/azure/* (key never leaves the server).
  */
 import React, { useEffect, useState, useCallback } from "react";
+import debug from "@/lib/debug";
 import {
   Zap, Cloud, Plug, Activity, Loader2, X, Wind, Eye, Sun, Droplets,
   AlertTriangle, Sparkles,
@@ -110,6 +111,36 @@ function Metric({ label, value, unit, accent = "text-cyan-100", icon: Icon = nul
   );
 }
 
+function ChargingStationCard({ station, onPick }) {
+  return (
+    <button
+      onClick={() => onPick && onPick(station)}
+      data-testid={`ev-station-${station.id}`}
+      className="w-full text-left atlantis-row px-3 py-2 border-b border-cyan-500/10 flex items-start gap-2"
+    >
+      <Zap className="w-3.5 h-3.5 mt-0.5 text-amber-300 flex-shrink-0" />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-mono text-[11px] font-semibold text-cyan-100 truncate">{station.name}</span>
+          <span className="font-mono text-[9px] text-cyan-500">{station.total_connectors > 0 ? `${station.total_connectors}×` : "—"}</span>
+        </div>
+        {station.address && <div className="font-mono text-[10px] text-cyan-300/80 truncate">{station.address}</div>}
+        {station.brand && <div className="font-mono text-[9px] text-cyan-500/80">▸ {station.brand}</div>}
+        {station.connectors.length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-1">
+            {station.connectors.slice(0, 3).map((c, i) => (
+              <span key={`${station.id}-conn-${c.type || "x"}-${i}`}
+                className="font-mono text-[8px] tracking-wider px-1 bg-cyan-500/10 border border-cyan-500/30 text-cyan-200">
+                {(c.type || "?").replace("IEC62196", "")} {c.kw ? `· ${c.kw}kW` : ""}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </button>
+  );
+}
+
 /* -------- EV Charging Stations Modal -------- */
 export function EVPanel({ lat, lon, onClose, onPick }) {
   const [data, setData] = useState(null);
@@ -123,7 +154,7 @@ export function EVPanel({ lat, lon, onClose, onPick }) {
       const d = await azureSearchEV(lat, lon, radius, 50, connector || undefined);
       setData(d);
     } catch (e) {
-      console.debug("EV fetch failed", e);
+      debug("EV fetch failed", e);
     } finally { setLoading(false); }
   }, [lat, lon, radius, connector]);
 
@@ -169,30 +200,7 @@ export function EVPanel({ lat, lon, onClose, onPick }) {
       </div>
       <div className="overflow-y-auto" style={{ maxHeight: "380px" }}>
         {data?.stations?.map((s) => (
-          <button key={s.id}
-            onClick={() => onPick && onPick(s)}
-            data-testid={`ev-station-${s.id}`}
-            className="w-full text-left atlantis-row px-3 py-2 border-b border-cyan-500/10 flex items-start gap-2">
-            <Zap className="w-3.5 h-3.5 mt-0.5 text-amber-300 flex-shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-mono text-[11px] font-semibold text-cyan-100 truncate">{s.name}</span>
-                <span className="font-mono text-[9px] text-cyan-500">{s.total_connectors > 0 ? `${s.total_connectors}×` : "—"}</span>
-              </div>
-              {s.address && <div className="font-mono text-[10px] text-cyan-300/80 truncate">{s.address}</div>}
-              {s.brand && <div className="font-mono text-[9px] text-cyan-500/80">▸ {s.brand}</div>}
-              {s.connectors.length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {s.connectors.slice(0, 3).map((c, i) => (
-                    <span key={`${s.id}-conn-${c.type || "x"}-${i}`}
-                      className="font-mono text-[8px] tracking-wider px-1 bg-cyan-500/10 border border-cyan-500/30 text-cyan-200">
-                      {(c.type || "?").replace("IEC62196", "")} {c.kw ? `· ${c.kw}kW` : ""}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          </button>
+          <ChargingStationCard key={s.id} station={s} onPick={onPick} />
         ))}
         {!loading && (!data?.stations || data.stations.length === 0) && (
           <div className="px-3 py-6 text-center font-mono text-[10px] text-cyan-700">[ NO STATIONS IN SECTOR ]</div>

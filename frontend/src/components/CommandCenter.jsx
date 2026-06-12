@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import debug from "@/lib/debug";
 import maplibregl from "maplibre-gl";
 import {
   Radio, Layers, Ruler, SquareParking, Search, RotateCw, Mountain, Satellite,
@@ -126,11 +127,11 @@ export default function CommandCenter() {
           map.setTerrain({ source: "terrain-rgb", exaggeration: 1.4 });
           map.easeTo({ pitch: 60, bearing: -17, duration: 1200 });
         } catch (e) {
-          console.debug("setTerrain failed (3D unavailable):", e);
+          debug("setTerrain failed (3D unavailable):", e);
         }
       } else {
         try { map.setTerrain(null); } catch (e) {
-          console.debug("setTerrain(null) failed:", e);
+          debug("setTerrain(null) failed:", e);
         }
         map.easeTo({ pitch: 0, bearing: 0, duration: 800 });
       }
