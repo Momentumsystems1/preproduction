@@ -1245,11 +1245,11 @@ async def _azure_route_simple(from_lat: float, from_lon: float,
 
 
 async def _find_parking_near(lat: float, lon: float, radius: int = 1500) -> List[Dict[str, Any]]:
-    """Find parking POIs via Azure Maps. Falls back to OSM Overpass."""
+    """Find parking POIs via Azure Maps fuzzy POI search (broader coverage than category 7311)."""
     if _azure_enabled():
-        url = (f"{AZURE_BASE}/search/poi/category/json?api-version=1.0"
+        url = (f"{AZURE_BASE}/search/poi/json?api-version=1.0"
                f"&query=parking&lat={lat}&lon={lon}&radius={radius}"
-               f"&categorySet=7311&limit=5&countrySet=ES&language=es-ES"
+               f"&limit=8&countrySet=ES&language=es-ES"
                f"&subscription-key={AZURE_KEY}")
         try:
             data = await _azure_get_json(url, ttl=300)

@@ -1,9 +1,88 @@
 /**
- * Route Optimizer floating panel — OSRM integration UI.
+ * Route Optimizer floating panel — OSRM + Azure multimodal integration.
  * Self-contained: receives route state + handlers from parent.
  */
 import React from "react";
-import { X, Loader2, Navigation2 } from "lucide-react";
+import { X, Loader2, Navigation2, Layers, ExternalLink, Car, Footprints, Bus } from "lucide-react";
+
+const MODE_ICON = {
+  car: Car,
+  foot: Footprints,
+  transit: Bus,
+};
+
+function SegmentRow({ seg }) {
+  const Icon = MODE_ICON[seg.mode] || Layers;
+  return (
+    <div className="flex items-start gap-2 text-[10px] font-mono text-cyan-100/90 py-0.5">
+      <Icon className="w-3 h-3 mt-0.5 text-cyan-300 flex-shrink-0" />
+      <div className="flex-1 leading-tight">
+        <span className="text-cyan-200">{seg.label}</span>
+        <span className="text-cyan-500/70 ml-1">
+          · {seg.duration_min}min{seg.distance_m ? ` · ${(seg.distance_m / 1000).toFixed(2)}km` : ""}
+        </span>
+      </div>
+      {seg.deeplink && (
+        <a
+          href={seg.deeplink}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-cyan-400 hover:text-cyan-200 flex-shrink-0"
+          title="Abrir en Google Maps Transit"
+        >
+          <ExternalLink className="w-3 h-3" />
+        </a>
+      )}
+    </div>
+  );
+}
+
+function MultimodalCard({ opt, idx, onPick }) {
+  const isBest = opt.best;
+  const deltaTxt = opt.delta_vs_car_min != null
+    ? (opt.delta_vs_car_min > 0
+        ? `−${opt.delta_vs_car_min}min vs coche`
+        : (opt.delta_vs_car_min < 0
+            ? `+${Math.abs(opt.delta_vs_car_min)}min vs coche`
+            : "igual vs coche"))
+    : null;
+
+  return (
+    <button
+      type="button"
+      data-testid={`multimodal-opt-${idx}`}
+      onClick={() => onPick && onPick(opt)}
+      className={`w-full text-left border transition-colors p-2.5 ${
+        isBest
+          ? "border-emerald-400/60 bg-emerald-500/8 hover:bg-emerald-500/15"
+          : "border-cyan-500/25 bg-cyan-500/3 hover:bg-cyan-500/10"
+      }`}
+      style={{ borderLeftColor: opt.color, borderLeftWidth: 3 }}
+    >
+      <div className="flex items-center justify-between mb-1">
+        <div className="font-mono text-[10px] tracking-[0.18em] text-cyan-100 font-bold">
+          {isBest && <span className="text-emerald-300">★ </span>}
+          {opt.label}
+        </div>
+        <div className="font-mono text-[11px] text-amber-300 tabular-nums">
+          {opt.total_duration_min}<span className="text-[9px] text-cyan-500/70"> min</span>
+        </div>
+      </div>
+      <div className="font-mono text-[9px] text-cyan-400/70 tracking-wide mb-1.5 flex items-center justify-between">
+        <span>
+          {opt.total_distance_km} km
+          {deltaTxt && <span className="ml-2 text-cyan-300/80">· {deltaTxt}</span>}
+        </span>
+      </div>
+      <div className="font-mono text-[10px] text-cyan-200/80 italic mb-1.5 leading-snug">
+        {opt.description}
+      </div>
+      <div className="border-t border-cyan-500/15 pt-1.5 space-y-0.5">
+        {opt.segments.map((s, i) => <SegmentRow key={i} seg={s} />)}
+      </div>
+    </button>
+  );
+}
 
 export default function RoutePanel({
   routeFrom, setRouteFrom,
@@ -11,15 +90,17 @@ export default function RoutePanel({
   routeMode, setRouteMode,
   routeResult,
   routeLoading,
-  onRun, onClear, onClose,
+  multimodalData,
+  multimodalLoading,
+  onRun, onClear, onClose, onPickMultimodal,
 }) {
   return (
     <div
-      className="absolute top-[150px] left-1/2 -translate-x-1/2 z-[55] w-[460px] panel-solid brackets anim-fade-up"
+      className="absolute top-[150px] left-1/2 -translate-x-1/2 z-[55] w-[480px] max-h-[78vh] panel-solid brackets anim-fade-up overflow-y-auto"
       data-testid="route-panel"
     >
-      <div className="section-head">
-        <span>ROUTE OPTIMIZER · OSRM</span>
+      <div className="section-head sticky top-0 bg-[#020a14] z-10">
+        <span>ROUTE OPTIMIZER · OSRM + MULTIMODAL</span>
         <button onClick={onClose} className="text-cyan-300/60 hover:text-cyan-100" data-testid="route-close">
           <X className="w-3.5 h-3.5" />
         </button>
@@ -103,6 +184,45 @@ export default function RoutePanel({
         {routeResult && routeResult.error && (
           <div className="mt-2 px-2 py-1.5 bg-red-500/10 border border-red-500/30 font-mono text-[10px] tracking-wider text-red-300">
             ▸ {routeResult.error}
+          </div>
+        )}
+
+        {/* ===== MULTIMODAL OPTIONS ===== */}
+        {(multimodalLoading || multimodalData) && (
+          <div className="mt-3 border-t border-cyan-500/15 pt-3" data-testid="multimodal-section">
+            <div className="flex items-center justify-between mb-2">
+              <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80">
+                ALTERNATIVAS MULTIMODALES · AZURE
+              </div>
+              {multimodalLoading && (
+                <Loader2 className="w-3 h-3 animate-spin text-cyan-400" />
+              )}
+            </div>
+            {multimodalLoading && !multimodalData && (
+              <div className="font-mono text-[10px] text-cyan-700 italic">
+                ▸ Calculando combinaciones (coche · parking · transporte)...
+              </div>
+            )}
+            {multimodalData && multimodalData.options && multimodalData.options.length > 0 && (
+              <div className="space-y-1.5" data-testid="multimodal-options">
+                {multimodalData.options.map((o, i) => (
+                  <MultimodalCard key={i} idx={i} opt={o} onPick={onPickMultimodal} />
+                ))}
+              </div>
+            )}
+            {multimodalData && (!multimodalData.options || multimodalData.options.length === 0) && (
+              <div className="font-mono text-[10px] text-cyan-700 italic">
+                ▸ Sin alternativas disponibles para este trayecto.
+              </div>
+            )}
+            {multimodalData?.parkings_considered?.length > 0 && (
+              <div className="mt-2 font-mono text-[9px] text-cyan-500/70 tracking-wide">
+                ▸ Parkings evaluados cerca del destino:{" "}
+                <span className="text-cyan-300/90">
+                  {multimodalData.parkings_considered.map((p) => p.name).join(" · ")}
+                </span>
+              </div>
+            )}
           </div>
         )}
       </div>

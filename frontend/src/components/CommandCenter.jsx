@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 
 import { STYLES } from "@/lib/mapStyles";
-import { fetchEvents, fetchParking, fetchCities, fetchHealth, geocode, fetchRoute, azureTileUrl, fetchMobilityStations } from "@/lib/api";
+import { fetchEvents, fetchParking, fetchCities, fetchHealth, geocode, fetchRoute, azureTileUrl, fetchMobilityStations, fetchMultimodalPlan } from "@/lib/api";
 import { KIND_ICON, KIND_GLYPH, KIND_LABEL, SEV_COLOR, SUBROUTINES, fmtTime, pad } from "@/lib/hudConstants";
 import { KPI, EventRow, EventDetail, StatusPill, SourceBadge } from "@/components/HudPrimitives";
 import { riskColor } from "@/lib/styleHelpers";
@@ -48,6 +48,8 @@ export default function CommandCenter() {
   const [routeMode, setRouteMode] = useState("car");
   const [routeResult, setRouteResult] = useState(null);
   const [routeLoading, setRouteLoading] = useState(false);
+  const [multimodalData, setMultimodalData] = useState(null);
+  const [multimodalLoading, setMultimodalLoading] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
 
   // Azure Maps stack toggles
@@ -626,6 +628,7 @@ export default function CommandCenter() {
     if (map.getLayer(ROUTE_LAYER)) map.removeLayer(ROUTE_LAYER);
     if (map.getSource(ROUTE_SOURCE)) map.removeSource(ROUTE_SOURCE);
     setRouteResult(null);
+    setMultimodalData(null);
   }, []);
 
   const runRoute = async () => {
@@ -634,12 +637,27 @@ export default function CommandCenter() {
       return;
     }
     setRouteLoading(true);
+    setMultimodalData(null);
     addLog(`[ROUTE] Optimizing ${routeMode.toUpperCase()} route...`, "info");
     try {
       const r = await fetchRoute(routeFrom, routeTo, routeMode);
       setRouteResult(r);
       drawRoute(r.geometry);
       addLog(`[ROUTE] ${r.distance_km}km · ${r.duration_min}min · CO₂≈${r.co2_g}g`, "ok");
+
+      // Fire-and-forget multimodal plan once we have geocoded coords
+      if (r?.from?.lat && r?.to?.lat) {
+        setMultimodalLoading(true);
+        addLog("[MMOD] Computing multimodal alternatives (Azure)...", "info");
+        fetchMultimodalPlan(r.from.lat, r.from.lon, r.to.lat, r.to.lon)
+          .then((mm) => {
+            setMultimodalData(mm);
+            const n = mm?.options?.length || 0;
+            addLog(`[MMOD] ${n} alternative${n === 1 ? "" : "s"} computed${mm?.options?.[0]?.best ? ` · best: ${mm.options[0].label}` : ""}`, "ok");
+          })
+          .catch((e) => addLog(`[MMOD] Multimodal failed: ${e.message}`, "err"))
+          .finally(() => setMultimodalLoading(false));
+      }
     } catch (e) {
       const msg = e.response?.data?.detail || e.message;
       addLog(`[ROUTE] ${msg}`, "err");
@@ -648,6 +666,46 @@ export default function CommandCenter() {
       setRouteLoading(false);
     }
   };
+
+  const handlePickMultimodal = useCallback((opt) => {
+    const map = mapRef.current;
+    if (!map) return;
+    addLog(`[MMOD] Selected ${opt.label} · ${opt.total_duration_min}min`, "info");
+    // Draw segment line on map
+    const coords = [];
+    opt.segments.forEach((s) => {
+      if (s.from) coords.push(s.from);
+      if (s.to) coords.push(s.to);
+    });
+    if (coords.length >= 2) {
+      const id = "multimodal-line";
+      const lineId = id + "-layer";
+      if (map.getLayer(lineId)) map.removeLayer(lineId);
+      if (map.getSource(id)) map.removeSource(id);
+      map.addSource(id, {
+        type: "geojson",
+        data: { type: "Feature", geometry: { type: "LineString", coordinates: coords } },
+      });
+      map.addLayer({
+        id: lineId,
+        type: "line",
+        source: id,
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": opt.color || "#22d3ee",
+          "line-width": 4,
+          "line-opacity": 0.9,
+          "line-dasharray": [2, 1.5],
+        },
+      });
+      const lons = coords.map((c) => c[0]);
+      const lats = coords.map((c) => c[1]);
+      map.fitBounds(
+        [[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
+        { padding: { top: 200, bottom: 220, left: 380, right: 380 }, duration: 1200 },
+      );
+    }
+  }, [addLog]);
 
   // ---- export GeoJSON / PDF ----
   const downloadBlob = (blob, filename) => {
@@ -1049,9 +1107,12 @@ export default function CommandCenter() {
           routeMode={routeMode} setRouteMode={setRouteMode}
           routeResult={routeResult}
           routeLoading={routeLoading}
+          multimodalData={multimodalData}
+          multimodalLoading={multimodalLoading}
           onRun={runRoute}
           onClear={() => { clearRoute(); setRouteFrom(""); setRouteTo(""); }}
           onClose={() => setShowRoutePanel(false)}
+          onPickMultimodal={handlePickMultimodal}
         />
       )}
 
