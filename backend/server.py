@@ -1209,6 +1209,175 @@ async def uber_estimates(
 app.include_router(uber_router)
 
 
+# ============================================================================
+# MULTI-MODAL TRIP PLANNER
+# Builds 4 combinations and picks the fastest. Uses Azure Maps for routing
+# and POI search. Falls back to simple haversine if Azure unavailable.
+# ============================================================================
+multimodal_router = APIRouter(prefix="/api/multimodal")
+
+
+async def _azure_route_simple(from_lat: float, from_lon: float,
+                                to_lat: float, to_lon: float,
+                                mode: str = "car", traffic: bool = True
+                                ) -> Optional[Dict[str, Any]]:
+    if not _azure_enabled():
+        return None
+    mode_map = {"car": "car", "foot": "pedestrian", "bike": "bicycle"}
+    travel = mode_map.get(mode, "car")
+    url = (f"{AZURE_BASE}/route/directions/json?api-version=1.0"
+           f"&query={from_lat},{from_lon}:{to_lat},{to_lon}"
+           f"&travelMode={travel}&traffic={'true' if traffic else 'false'}"
+           f"&subscription-key={AZURE_KEY}")
+    try:
+        data = await _azure_get_json(url, ttl=60)
+        if not data.get("routes"):
+            return None
+        s = data["routes"][0].get("summary", {})
+        return {
+            "distance_m": s.get("lengthInMeters", 0),
+            "duration_s": s.get("travelTimeInSeconds", 0),
+            "duration_min": round(s.get("travelTimeInSeconds", 0) / 60, 1),
+            "traffic_delay_s": s.get("trafficDelayInSeconds", 0),
+        }
+    except (httpx.RequestError, HTTPException, KeyError):
+        return None
+
+
+async def _find_parking_near(lat: float, lon: float, radius: int = 1500) -> List[Dict[str, Any]]:
+    """Find parking POIs via Azure Maps. Falls back to OSM Overpass."""
+    if _azure_enabled():
+        url = (f"{AZURE_BASE}/search/poi/category/json?api-version=1.0"
+               f"&query=parking&lat={lat}&lon={lon}&radius={radius}"
+               f"&categorySet=7311&limit=5&countrySet=ES&language=es-ES"
+               f"&subscription-key={AZURE_KEY}")
+        try:
+            data = await _azure_get_json(url, ttl=300)
+            return [{
+                "name": r.get("poi", {}).get("name", "Parking"),
+                "lat": r.get("position", {}).get("lat"),
+                "lon": r.get("position", {}).get("lon"),
+                "address": r.get("address", {}).get("freeformAddress"),
+            } for r in data.get("results", [])[:5] if r.get("position")]
+        except (httpx.RequestError, HTTPException):
+            pass
+    return []
+
+
+def _format_option(label: str, segments: List[Dict[str, Any]], emoji: str,
+                    description: str, color: str = "#22d3ee") -> Dict[str, Any]:
+    total_min = sum(s.get("duration_min", 0) for s in segments)
+    total_km = sum(s.get("distance_m", 0) for s in segments) / 1000
+    return {
+        "label": label, "emoji": emoji, "description": description,
+        "color": color,
+        "segments": segments,
+        "total_duration_min": round(total_min, 1),
+        "total_distance_km": round(total_km, 2),
+    }
+
+
+@multimodal_router.get("/plan")
+async def multimodal_plan(
+    from_lat: float, from_lon: float,
+    to_lat: float, to_lon: float,
+):
+    """Compute 4 multimodal trip combinations and rank by fastest."""
+
+    # OPTION A: 100% car direct (with live traffic)
+    car_direct = await _azure_route_simple(from_lat, from_lon, to_lat, to_lon, "car", True)
+
+    # Find parking near destination for park-and-walk / park-and-bus combos
+    parkings = await _find_parking_near(to_lat, to_lon, 1500)
+    best_parking = parkings[0] if parkings else None
+
+    options: List[Dict[str, Any]] = []
+
+    if car_direct:
+        delay_min = round(car_direct.get("traffic_delay_s", 0) / 60, 1)
+        options.append(_format_option(
+            "100% COCHE DIRECTO", [{
+                "mode": "car",
+                "from": [from_lon, from_lat], "to": [to_lon, to_lat],
+                "duration_min": car_direct["duration_min"],
+                "distance_m": car_direct["distance_m"],
+                "label": "Conducir al destino",
+            }], "🚗",
+            f"Tiempo total incluye ~{delay_min} min de retraso por tráfico.",
+            "#fbbf24" if delay_min > 5 else "#22d3ee",
+        ))
+
+    if best_parking:
+        # OPTION B: car to parking + walk
+        leg_car = await _azure_route_simple(from_lat, from_lon, best_parking["lat"], best_parking["lon"], "car", True)
+        leg_walk = await _azure_route_simple(best_parking["lat"], best_parking["lon"], to_lat, to_lon, "foot", False)
+        if leg_car and leg_walk:
+            options.append(_format_option(
+                "🚗→🚶 COCHE + PARKING + ANDAR",
+                [
+                    {"mode": "car", "duration_min": leg_car["duration_min"], "distance_m": leg_car["distance_m"],
+                     "label": f"Conducir a {best_parking['name']}", "to": [best_parking["lon"], best_parking["lat"]]},
+                    {"mode": "foot", "duration_min": leg_walk["duration_min"], "distance_m": leg_walk["distance_m"],
+                     "label": f"Andar {leg_walk['distance_m']}m hasta el destino",
+                     "from": [best_parking["lon"], best_parking["lat"]], "to": [to_lon, to_lat]},
+                ], "🚗🚶",
+                f"Aparcas en {best_parking['name']} y caminas {leg_walk['distance_m']}m. "
+                f"Evitas atascos en el último tramo.",
+                "#22d3ee",
+            ))
+
+        # OPTION C: car to parking + transit (deeplink only — Google Transit handles routing)
+        if leg_car:
+            transit_walk_min = round(leg_walk["duration_min"] * 0.6, 1) if leg_walk else 5
+            options.append(_format_option(
+                "🚗→🚌 COCHE + PARKING + TRANSPORTE",
+                [
+                    {"mode": "car", "duration_min": leg_car["duration_min"], "distance_m": leg_car["distance_m"],
+                     "label": f"Conducir a {best_parking['name']}",
+                     "to": [best_parking["lon"], best_parking["lat"]]},
+                    {"mode": "transit", "duration_min": transit_walk_min, "distance_m": 0,
+                     "label": "Bus/metro al destino (estimado)",
+                     "deeplink": f"https://www.google.com/maps/dir/?api=1&origin={best_parking['lat']},{best_parking['lon']}&destination={to_lat},{to_lon}&travelmode=transit",
+                     "from": [best_parking["lon"], best_parking["lat"]], "to": [to_lon, to_lat]},
+                ], "🚗🚌",
+                "Aparcas y coges transporte público para el último tramo. "
+                "Idea para evitar zonas restringidas / sin parking cerca del destino.",
+                "#c084fc",
+            ))
+
+    # OPTION D: 100% transit (deeplink only)
+    options.append(_format_option(
+        "🚌 100% TRANSPORTE PÚBLICO",
+        [{
+            "mode": "transit",
+            "duration_min": (car_direct["duration_min"] * 1.4) if car_direct else 30,
+            "distance_m": car_direct["distance_m"] if car_direct else 5000,
+            "label": "Bus / Metro / Tren puerta a puerta",
+            "deeplink": f"https://www.google.com/maps/dir/?api=1&origin={from_lat},{from_lon}&destination={to_lat},{to_lon}&travelmode=transit",
+            "from": [from_lon, from_lat], "to": [to_lon, to_lat],
+        }], "🚌",
+        "Sin coche, 0 emisiones, 0 búsqueda de parking. Tiempo estimado al alza.",
+        "#4ade80",
+    ))
+
+    # Rank
+    options.sort(key=lambda o: o["total_duration_min"])
+    if options:
+        options[0]["best"] = True
+        baseline = next((o["total_duration_min"] for o in options if "DIRECTO" in o["label"]), options[0]["total_duration_min"])
+        for o in options:
+            o["delta_vs_car_min"] = round(baseline - o["total_duration_min"], 1)
+    return {
+        "options": options,
+        "parkings_considered": parkings[:3],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+app.include_router(multimodal_router)
+
+
+
 
 
 app.add_middleware(

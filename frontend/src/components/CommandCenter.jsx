@@ -203,53 +203,98 @@ export default function CommandCenter() {
 
   const renderEventMarkers = useCallback((data) => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || !map.isStyleLoaded()) return;
+
+    // Clean up any legacy HTML markers from previous versions
     markersRef.current.forEach((m) => m.remove());
     markersRef.current = [];
-    if (!data || !data.features) return;
-    const feats = filterKind === "all" ? data.features : data.features.filter((f) => f.kind === filterKind);
-    feats.forEach((f) => {
-      const el = document.createElement("div");
-      el.className = `mrc-marker kind-${f.kind}`;
-      el.setAttribute("data-testid", `event-marker-${f.id}`);
-      const glyphSpan = document.createElement("span");
-      glyphSpan.textContent = KIND_GLYPH[f.kind] || "?";
-      el.appendChild(glyphSpan);
-      el.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        setSelected(f);
-        addLog(`[SEL ] Target acquired ${f.id} (${(f.kind || "incidencia").toUpperCase()})`, "info");
-        map.easeTo({ center: [f.lon, f.lat], zoom: Math.max(map.getZoom(), 13), duration: 600 });
+
+    const SRC = "events-src";
+    const CIRC = "events-circle";
+    const TXT = "events-text";
+
+    const feats = !data ? [] : (filterKind === "all"
+      ? data.features
+      : data.features.filter((f) => f.kind === filterKind));
+
+    const fc = {
+      type: "FeatureCollection",
+      features: feats.map((f) => ({
+        type: "Feature",
+        properties: {
+          id: f.id, kind: f.kind, severity: f.severity,
+          road: f.road, source: f.source,
+          title: f.title, description: f.description,
+        },
+        geometry: { type: "Point", coordinates: [f.lon, f.lat] },
+      })),
+    };
+
+    if (map.getSource(SRC)) {
+      map.getSource(SRC).setData(fc);
+    } else {
+      map.addSource(SRC, { type: "geojson", data: fc });
+      map.addLayer({
+        id: CIRC,
+        type: "circle",
+        source: SRC,
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 5, 14, 10, 18, 14],
+          "circle-color": ["match", ["get", "kind"],
+            "accidente",  "#ef4444",
+            "obras",      "#fbbf24",
+            "congestion", "#c084fc",
+            "peligro",    "#fb923c",
+            "meteo",      "#22d3ee",
+            "incidencia", "#67e8f9",
+            /* fallback */ "#67e8f9",
+          ],
+          "circle-stroke-color": "rgba(2,10,20,0.85)",
+          "circle-stroke-width": 1.5,
+          "circle-opacity": 0.95,
+        },
       });
-      el.addEventListener("mouseenter", () => {
-        if (hoverPopupRef.current) hoverPopupRef.current.remove();
-        const popupNode = document.createElement("div");
-        const src = document.createElement("div");
-        src.style.cssText = "font-family:'IBM Plex Mono',monospace;font-size:10px;color:#22d3ee;text-transform:uppercase;letter-spacing:0.18em;";
-        src.textContent = `▸ ${f.source}`;
-        const title = document.createElement("div");
-        title.style.cssText = "font-weight:600;font-size:13px;margin-top:4px;color:#e0f2fe";
-        title.textContent = KIND_LABEL[f.kind] || "INCIDENCIA";
-        const road = document.createElement("div");
-        road.style.cssText = "color:#7dd3fc;font-size:12px;margin-top:2px;font-family:'IBM Plex Mono',monospace";
-        road.textContent = f.road || "";
-        const idDiv = document.createElement("div");
-        idDiv.style.cssText = "color:#4a8ab4;font-size:10px;margin-top:4px;font-family:'IBM Plex Mono',monospace";
-        idDiv.textContent = `ID ${f.id}`;
-        popupNode.append(src, title, road, idDiv);
-        hoverPopupRef.current = new maplibregl.Popup({ closeButton: false, className: "mrc-popup", offset: 18 })
-          .setLngLat([f.lon, f.lat])
-          .setDOMContent(popupNode)
-          .addTo(map);
+      map.addLayer({
+        id: TXT,
+        type: "symbol",
+        source: SRC,
+        layout: {
+          "text-field": ["match", ["get", "kind"],
+            "accidente",  "X",
+            "obras",      "!",
+            "congestion", "≋",
+            "peligro",    "▲",
+            "meteo",      "~",
+            "incidencia", "i",
+            "i",
+          ],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 8, 8, 14, 11, 18, 14],
+          "text-font": ["Noto Sans Regular"],
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: {
+          "text-color": "#02101a",
+          "text-halo-color": "rgba(0,0,0,0)",
+        },
       });
-      el.addEventListener("mouseleave", () => {
-        if (hoverPopupRef.current) { hoverPopupRef.current.remove(); hoverPopupRef.current = null; }
+
+      // Click handler — same as before
+      map.on("click", CIRC, (ev) => {
+        const f = ev.features?.[0];
+        if (!f) return;
+        const props = f.properties;
+        const [lon, lat] = f.geometry.coordinates;
+        const evt = { ...props, lat, lon };
+        setSelected(evt);
+        addLog(`[SEL ] Target acquired ${props.id} (${(props.kind || "incidencia").toUpperCase()})`, "info");
+        map.easeTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), 13), duration: 600 });
       });
-      const marker = new maplibregl.Marker({ element: el, anchor: "center" })
-        .setLngLat([f.lon, f.lat])
-        .addTo(map);
-      markersRef.current.push(marker);
-    });
+
+      // Cursor hover
+      map.on("mouseenter", CIRC, () => { map.getCanvas().style.cursor = "pointer"; });
+      map.on("mouseleave", CIRC, () => { map.getCanvas().style.cursor = ""; });
+    }
   }, [filterKind, addLog]);
 
   useEffect(() => { renderEventMarkers(eventsData); }, [eventsData, filterKind, renderEventMarkers]);
