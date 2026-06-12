@@ -42,6 +42,23 @@ Refactor of an existing tool that connects to DATEX DGT 3.0 and Servei Català d
   - Diamond-shaped event markers, color-coded by kind, hover popup, click to select
   - Corner brackets, scanline overlay, radar sweep loading state, dotted measure line
 
+### Update 2026-06-12 (RADICAL UI REDESIGN — Radial Command)
+- **Old HUD hidden by default** (toggle with `H` key or "MODO EXPERTO" button).
+- **New `RadialCommand` component** (`/app/frontend/src/components/RadialCommand.jsx`) becomes the primary UI:
+  - Central draggable orb with **3 skins** (orb / crystal / minimal) cycled via palette button.
+  - **3 concentric rings × 6 slots = 18 actions**:
+    - OUTER (cyan): Tráfico · Parking · Bicis · EV · Clima · Transporte
+    - MIDDLE (amber): Coche · Bus · Bici · Andar · Patinete · Taxi
+    - INNER (violet): Origen · Destino · Calcular · Medir · Info · Reset
+  - Click a slot → rotates to 12 o'clock; **smart cross-ring links** auto-align the other two rings (e.g. "Tráfico" → Car + Calcular).
+  - Drag a ring to manually rotate; snaps to nearest slot on release.
+  - Control core can be **dragged anywhere on screen**, **minimized**, or **maximized**.
+  - Auto-collapses when pointer leaves a 280 px radius.
+- **Map-click → context-aware action**: when inner ring is on "Origen" / "Destino", clicking the map fixes those points (visualised as native GeoJSON markers).
+- **Drag control over a traffic incident** → context auto-bound to that feature (queryRenderedFeatures on `events-circle` layer).
+- **ENTRAR button** appears when context is set → fires `/api/multimodal/plan` and overlays the 4 ranked alternatives at the bottom of the screen.
+- Status chip top-left tracks live state: `LAYER · MODE · ACTION · ORG · DST`.
+
 ### Update 2026-06-12 (multimodal trip planner)
 - New endpoint **`/api/multimodal/plan`** ranks up to 4 trip combinations by fastest:
   - 100% car (with live Azure traffic delay)
@@ -49,6 +66,7 @@ Refactor of an existing tool that connects to DATEX DGT 3.0 and Servei Català d
   - Car → parking → transit (Google Transit deep-link)
   - 100% transit (deep-link)
 - Switched parking discovery from Azure category POI (7311 returned 0 results) to Azure fuzzy POI search → 3+ Madrid parkings now resolved (Carmen, Plaza de Oriente, El Corte Inglés).
+- Parallelized the 3 Azure calls inside `/api/multimodal/plan` with `asyncio.gather` (latency 2.5 s → ~0.9 s).
 - Event markers migrated from HTML markers to native MapLibre GeoJSON layers (`events-circle` + `events-text`) → zero drift on zoom.
 - `RoutePanel` extended with `ALTERNATIVAS MULTIMODALES · AZURE` section showing each option as a card (segments, deeplinks, parkings considered, ★ best, delta_vs_car_min).
 - Clicking a multimodal card draws a dashed polyline on the map in the option color and logs `[MMOD] Selected …`.

@@ -16,6 +16,7 @@ import RoutePanel from "@/components/RoutePanel";
 import BottomDock from "@/components/BottomDock";
 import { AzureToolbar, WeatherChip, EVPanel } from "@/components/AzureStack";
 import MobilityHub from "@/components/MobilityHub";
+import RadialCommand from "@/components/RadialCommand";
 import jsPDF from "jspdf";
 
 export default function CommandCenter() {
@@ -74,6 +75,16 @@ export default function CommandCenter() {
 
   // diagnostic stream log
   const [logs, setLogs] = useState([]);
+  const [mapReady, setMapReady] = useState(false);
+
+  // ===== Radial Command state =====
+  const [expertMode, setExpertMode] = useState(false);  // OFF by default → minimal map + radial only
+  const [radialSel, setRadialSel] = useState({ layer: "traffic", mode: "car", action: "origin" });
+  const [radialOrigin, setRadialOrigin] = useState(null);       // [lng,lat]
+  const [radialDest, setRadialDest] = useState(null);           // [lng,lat]
+  const [contextFeature, setContextFeature] = useState(null);   // dropped-on incident
+  const [radialMmod, setRadialMmod] = useState(null);
+  const [radialMmodOpen, setRadialMmodOpen] = useState(false);
   const addLog = useCallback((msg, kind = "info") => {
     setLogs((l) => [{ id: Date.now() + Math.random(), msg, kind, t: new Date() }, ...l].slice(0, 24));
   }, []);
@@ -83,6 +94,162 @@ export default function CommandCenter() {
     const t = setInterval(() => setClock(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  // =====================================================================
+  //  RADIAL COMMAND wiring
+  // =====================================================================
+
+  // Keyboard: `H` toggles expert HUD; `Esc` resets context
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.target?.tagName === "INPUT" || e.target?.tagName === "TEXTAREA") return;
+      if (e.key === "h" || e.key === "H") setExpertMode((v) => !v);
+      if (e.key === "Escape") setContextFeature(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Sync radial layer-selection → existing show* toggles (when in radial mode)
+  useEffect(() => {
+    if (expertMode) return;            // user is driving manually
+    setShowAzureFlow(radialSel.layer === "traffic");
+    setShowAzureIncidents(radialSel.layer === "traffic");
+    setShowParking(radialSel.layer === "parking");
+    setShowMobility(radialSel.layer === "bikes");
+    setShowAzureWeather(radialSel.layer === "weather");
+    // EV layer doesn't have a marker layer; we just open the panel mini-info
+  }, [radialSel.layer, expertMode]);
+
+  // Render origin/destination markers via native source
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const buildSource = (id, coords, color, label) => {
+      if (!coords) {
+        if (map.getLayer(id + "-c")) map.removeLayer(id + "-c");
+        if (map.getLayer(id + "-l")) map.removeLayer(id + "-l");
+        if (map.getSource(id)) map.removeSource(id);
+        return;
+      }
+      const data = {
+        type: "Feature",
+        geometry: { type: "Point", coordinates: coords },
+        properties: { label },
+      };
+      if (map.getSource(id)) {
+        map.getSource(id).setData(data);
+      } else {
+        map.addSource(id, { type: "geojson", data });
+        map.addLayer({ id: id + "-c", type: "circle", source: id,
+          paint: { "circle-radius": 9, "circle-color": color, "circle-stroke-color": "#020a14", "circle-stroke-width": 2 } });
+        map.addLayer({ id: id + "-l", type: "symbol", source: id,
+          layout: { "text-field": label, "text-size": 11, "text-font": ["Open Sans Bold"], "text-offset": [0, -2], "text-anchor": "top" },
+          paint: { "text-color": color, "text-halo-color": "#020a14", "text-halo-width": 1.5 } });
+      }
+    };
+    const ready = () => {
+      buildSource("radial-origin", radialOrigin, "#4ade80", "ORIGEN");
+      buildSource("radial-dest",   radialDest,   "#fbbf24", "DESTINO");
+    };
+    if (map.isStyleLoaded()) ready();
+    else map.once("styledata", ready);
+  }, [radialOrigin, radialDest, mapStyle, mapReady]);
+
+  // Map click → set origin / destination based on radial inner action
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (expertMode) return;                          // expert mode uses its own click flow
+    if (measureMode) return;                          // measure takes precedence
+
+    const onClick = (e) => {
+      const lngLat = [e.lngLat.lng, e.lngLat.lat];
+      if (radialSel.action === "origin") {
+        setRadialOrigin(lngLat);
+        addLog(`[RADIAL] ORIGEN fijado · ${lngLat[1].toFixed(4)},${lngLat[0].toFixed(4)}`, "ok");
+      } else if (radialSel.action === "destination") {
+        setRadialDest(lngLat);
+        addLog(`[RADIAL] DESTINO fijado · ${lngLat[1].toFixed(4)},${lngLat[0].toFixed(4)}`, "ok");
+      } else if (radialSel.action === "info") {
+        // Show nearby feature info
+        const features = map.queryRenderedFeatures(e.point, { layers: ["events-circle"].filter((l) => map.getLayer(l)) });
+        if (features.length) {
+          const f = features[0];
+          setContextFeature({ id: f.properties?.id, label: f.properties?.kindLabel || "Punto", lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], severity: f.properties?.severity });
+          addLog(`[RADIAL] Info: ${f.properties?.kindLabel || "Punto"}`, "info");
+        } else {
+          setContextFeature(null);
+        }
+      }
+    };
+    map.on("click", onClick);
+    return () => { map.off("click", onClick); };
+  }, [radialSel.action, expertMode, measureMode, addLog, mapReady]);
+
+  // Detect when the radial control is dropped over an incident → set as context
+  const handleRadialDrop = useCallback((pt) => {
+    if (!pt?.dropped) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const layers = ["events-circle"].filter((l) => map.getLayer(l));
+    if (!layers.length) return;
+    const feats = map.queryRenderedFeatures([pt.x, pt.y], { layers });
+    if (feats.length) {
+      const f = feats[0];
+      setContextFeature({
+        id: f.properties?.id,
+        label: f.properties?.kindLabel || "Incidente",
+        lat: f.geometry.coordinates[1],
+        lon: f.geometry.coordinates[0],
+        severity: f.properties?.severity,
+      });
+      addLog(`[RADIAL] Control sobre ${f.properties?.kindLabel || "incidente"}`, "warn");
+    }
+  }, [addLog]);
+
+  // Confirm button → trigger contextual action
+  const handleRadialConfirm = useCallback(async () => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (radialSel.action === "route") {
+      if (!radialOrigin || !radialDest) {
+        addLog("[RADIAL] Faltan origen y/o destino", "err");
+        return;
+      }
+      addLog("[RADIAL] Calculando ruta multimodal...", "info");
+      try {
+        const mm = await fetchMultimodalPlan(radialOrigin[1], radialOrigin[0], radialDest[1], radialDest[0]);
+        setRadialMmod(mm);
+        setRadialMmodOpen(true);
+        addLog(`[RADIAL] ${mm.options?.length || 0} opciones · mejor: ${mm.options?.[0]?.label}`, "ok");
+      } catch (e) {
+        addLog(`[RADIAL] Multimodal falló: ${e.message}`, "err");
+      }
+      return;
+    }
+    if (radialSel.action === "reset") {
+      setRadialOrigin(null);
+      setRadialDest(null);
+      setContextFeature(null);
+      setRadialMmod(null);
+      setRadialMmodOpen(false);
+      addLog("[RADIAL] Reset · todo limpio", "info");
+      return;
+    }
+    if (radialSel.action === "measure") {
+      setMeasureMode((v) => !v);
+      addLog(`[RADIAL] Medir ${!measureMode ? "ON" : "OFF"}`, "info");
+      return;
+    }
+    if (radialSel.action === "info" && contextFeature) {
+      // Flicker map fly to context
+      map.flyTo({ center: [contextFeature.lon, contextFeature.lat], zoom: 14, duration: 800 });
+      return;
+    }
+  }, [radialSel.action, radialOrigin, radialDest, contextFeature, measureMode, addLog]);
+
 
   // ---- init map ----
   useEffect(() => {
@@ -99,6 +266,8 @@ export default function CommandCenter() {
     mapRef.current = map;
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
     map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
+
+    map.on("load", () => setMapReady(true));
 
     map.on("pitch", () => setPitch(Math.round(map.getPitch())));
     map.on("zoom", () => setZoom(map.getZoom().toFixed(2)));
@@ -898,6 +1067,11 @@ export default function CommandCenter() {
       {/* Scanline overlay */}
       <div className="scanline" style={{ top: 0 }} />
 
+      {/* ============================================================
+          EXPERT HUD — hidden by default. Toggle with `H` key.
+          The new RadialCommand interface is the primary control.
+          ============================================================ */}
+      {expertMode && (<>
       {/* ===== TOP HEADER ===== */}
       <header className="absolute top-0 left-0 right-0 z-50 panel border-x-0 border-t-0" data-testid="top-header">
         <div className="flex items-stretch">
@@ -1337,6 +1511,73 @@ export default function CommandCenter() {
           </div>
         </div>
       </footer>
+      </>)}
+
+      {/* ===== RADIAL COMMAND · primary UI (always rendered) ===== */}
+      <RadialCommand
+        origin={radialOrigin}
+        destination={radialDest}
+        contextFeature={contextFeature}
+        onSelectionChange={setRadialSel}
+        onConfirm={() => handleRadialConfirm()}
+        onPointerMoveOverMap={handleRadialDrop}
+      />
+
+      {/* Minimal status chip (visible in radial mode only) */}
+      {!expertMode && (
+        <div className="absolute top-4 left-4 z-40 panel px-3 py-2 flex items-center gap-3 pointer-events-none" data-testid="radial-status-chip">
+          <div className="live-dot" />
+          <div className="font-mono text-[10px] tracking-[0.22em] text-cyan-300">MOMENTUM · {clock.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</div>
+          <div className="text-cyan-500/40">|</div>
+          <div className="font-mono text-[10px] tracking-wide text-cyan-200">
+            {radialSel.layer.toUpperCase()} · {radialSel.mode.toUpperCase()} · {radialSel.action.toUpperCase()}
+          </div>
+          {radialOrigin && <span className="font-mono text-[10px] text-emerald-300">· ORG</span>}
+          {radialDest && <span className="font-mono text-[10px] text-amber-300">· DST</span>}
+        </div>
+      )}
+
+      {/* Top-right corner: toggle expert HUD + cycle map style */}
+      <div className="absolute top-4 right-4 z-40 flex gap-2">
+        <button
+          data-testid="toggle-expert-hud"
+          onClick={() => setExpertMode((v) => !v)}
+          className="px-2.5 py-1.5 bg-[#020a14]/85 border border-cyan-500/40 hover:border-cyan-300 font-mono text-[10px] tracking-[0.22em] text-cyan-300"
+          title="Toggle expert HUD (key: H)"
+        >
+          {expertMode ? "▸ MODO SIMPLE" : "▸ MODO EXPERTO"}
+        </button>
+      </div>
+
+      {/* Multimodal results overlay (radial mode) */}
+      {!expertMode && radialMmodOpen && radialMmod && (
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 panel-solid p-4 w-[640px] max-w-[95vw] max-h-[42vh] overflow-y-auto" data-testid="radial-mmod-panel">
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-mono text-[10px] tracking-[0.28em] text-cyan-300">RUTA MULTIMODAL · {radialMmod.options?.length || 0} OPCIONES</div>
+            <button onClick={() => setRadialMmodOpen(false)} className="text-cyan-400 hover:text-cyan-100" data-testid="radial-mmod-close">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {radialMmod.options?.map((o, i) => (
+              <div
+                key={o.label || i}
+                className={`border p-2 ${o.best ? "border-emerald-400/60 bg-emerald-500/8" : "border-cyan-500/25 bg-cyan-500/3"}`}
+                style={{ borderLeftColor: o.color, borderLeftWidth: 3 }}
+                data-testid={`radial-mmod-opt-${i}`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="font-mono text-[10px] tracking-[0.18em] text-cyan-100 font-bold">
+                    {o.best && <span className="text-emerald-300">★ </span>}{o.label}
+                  </div>
+                  <div className="font-mono text-[11px] text-amber-300 tabular-nums">{o.total_duration_min}<span className="text-[9px] text-cyan-500/70"> min</span></div>
+                </div>
+                <div className="font-mono text-[9px] text-cyan-500/70 mt-1">{o.total_distance_km}km · {o.description}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Loading overlay */}
       {loading && !eventsData && (
