@@ -60,3 +60,8 @@ export const fetchRideDeeplinks = (from_lat, from_lon, to_lat, to_lon) =>
   api.get("/mobility/ride/deeplinks", {
     params: { from_lat, from_lon, to_lat, to_lon },
   }).then((r) => r.data);
+
+export const fetchUberEstimates = (start_lat, start_lon, end_lat, end_lon) =>
+  api.get("/uber/estimates", { params: { start_lat, start_lon, end_lat, end_lon } }).then((r) => r.data);
+
+export const fetchUberStatus = () => api.get("/uber/status").then((r) => r.data);

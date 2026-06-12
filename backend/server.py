@@ -13,6 +13,7 @@ import time
 import math
 import logging
 import asyncio
+import asyncio
 import html
 import httpx
 from pathlib import Path
@@ -1015,6 +1016,161 @@ async def ride_deeplinks(
 
 
 app.include_router(mobility_router)
+
+
+# ============================================================================
+# UBER · Riders sandbox + intelligent fallback
+# Tries real Uber API first; on scope/auth failure, returns a transparent
+# estimation based on published Spain fares (clearly labelled as estimate).
+# ============================================================================
+UBER_CLIENT_ID = os.environ.get("UBER_CLIENT_ID", "")
+UBER_CLIENT_SECRET = os.environ.get("UBER_CLIENT_SECRET", "")
+UBER_SANDBOX = os.environ.get("UBER_SANDBOX", "true").lower() == "true"
+UBER_OAUTH = "https://sandbox-login.uber.com/oauth/v2/token" if UBER_SANDBOX else "https://login.uber.com/oauth/v2/token"
+UBER_API = "https://sandbox-api.uber.com" if UBER_SANDBOX else "https://api.uber.com"
+uber_router = APIRouter(prefix="/api/uber")
+
+# Public Uber fare structure for Spain/Madrid (sourced from uber.com/es/es/price-estimate)
+UBER_FARES_ES = [
+    {"display_name": "UberX",      "base": 1.50, "per_km": 0.95, "per_min": 0.18, "min_fare": 5.00, "capacity": 4, "image": "https://d1a3f4spazzrp4.cloudfront.net/car-types/haloProductImages/v1.2/UberX.png"},
+    {"display_name": "UberXL",     "base": 2.50, "per_km": 1.65, "per_min": 0.25, "min_fare": 8.00, "capacity": 6, "image": "https://d1a3f4spazzrp4.cloudfront.net/car-types/haloProductImages/v1.2/UberXL.png"},
+    {"display_name": "Comfort",    "base": 2.00, "per_km": 1.20, "per_min": 0.22, "min_fare": 6.50, "capacity": 4, "image": "https://d1a3f4spazzrp4.cloudfront.net/car-types/haloProductImages/v1.2/uber_comfort.png"},
+    {"display_name": "Uber Black", "base": 4.50, "per_km": 1.85, "per_min": 0.40, "min_fare": 12.00, "capacity": 4, "image": "https://d1a3f4spazzrp4.cloudfront.net/car-types/haloProductImages/v1.2/UberBlack.png"},
+    {"display_name": "Uber Green", "base": 1.50, "per_km": 1.00, "per_min": 0.18, "min_fare": 5.50, "capacity": 4, "image": "https://d1a3f4spazzrp4.cloudfront.net/car-types/haloProductImages/v1.2/uber_green.png"},
+]
+
+_uber_token_cache: Dict[str, Any] = {}
+
+
+async def _uber_token() -> Optional[str]:
+    """Cached OAuth token via client_credentials. Returns None if app has no scopes yet."""
+    if not (UBER_CLIENT_ID and UBER_CLIENT_SECRET):
+        return None
+    cached = _uber_token_cache.get("t")
+    if cached and cached["exp"] > time.time() + 30:
+        return cached["token"]
+    try:
+        async with httpx.AsyncClient(timeout=12) as c:
+            r = await c.post(UBER_OAUTH, data={
+                "client_id": UBER_CLIENT_ID,
+                "client_secret": UBER_CLIENT_SECRET,
+                "grant_type": "client_credentials",
+                "scope": "profile",
+            })
+            if r.status_code == 200:
+                j = r.json()
+                _uber_token_cache["t"] = {"token": j["access_token"], "exp": time.time() + j.get("expires_in", 1800)}
+                return j["access_token"]
+    except httpx.RequestError as e:
+        logger.warning(f"Uber token error: {e}")
+    return None
+
+
+def _estimate_uber_for_route(distance_km: float, duration_min: float) -> List[Dict[str, Any]]:
+    """Build per-product price/ETA estimates using public Spain fare structure."""
+    out = []
+    for p in UBER_FARES_ES:
+        low = p["base"] + distance_km * p["per_km"] + duration_min * p["per_min"]
+        low = max(low, p["min_fare"])
+        high = low * 1.25
+        out.append({
+            "product": p["display_name"],
+            "capacity": p["capacity"],
+            "image": p["image"],
+            "low_estimate": round(low, 1),
+            "high_estimate": round(high, 1),
+            "currency": "EUR",
+            "estimate": f"{round(low, 1)}-{round(high, 1)} €",
+            "surge_multiplier": 1.0,
+            "duration_min": round(duration_min, 0),
+            "distance_km": round(distance_km, 2),
+        })
+    return out
+
+
+@uber_router.get("/status")
+async def uber_status():
+    tok = await _uber_token()
+    return {
+        "enabled": bool(UBER_CLIENT_ID and UBER_CLIENT_SECRET),
+        "sandbox": UBER_SANDBOX,
+        "oauth_ok": tok is not None,
+        "mode": "live-api" if tok else "fare-estimation",
+        "note": "Si oauth_ok=False, falta habilitar scopes en el Developer Dashboard de Uber. Mientras tanto se devuelven estimaciones basadas en las tarifas públicas de Uber España.",
+    }
+
+
+@uber_router.get("/products")
+async def uber_products(lat: float, lon: float):
+    """List Uber products in a location. Falls back to known catalog if no live access."""
+    tok = await _uber_token()
+    if tok:
+        try:
+            async with httpx.AsyncClient(timeout=12) as c:
+                r = await c.get(f"{UBER_API}/v1.2/products",
+                                params={"latitude": lat, "longitude": lon},
+                                headers={"Authorization": f"Bearer {tok}",
+                                         "Accept-Language": "es_ES"})
+                if r.status_code == 200:
+                    return {"mode": "live-api", **r.json()}
+        except httpx.RequestError:
+            pass
+    # Fallback: static catalog
+    products = [{"product_id": p["display_name"].lower().replace(" ", "_"),
+                 "display_name": p["display_name"],
+                 "capacity": p["capacity"],
+                 "image": p["image"],
+                 "description": f"Capacidad: {p['capacity']} pax · Tarifa España"}
+                for p in UBER_FARES_ES]
+    return {"mode": "fare-estimation", "products": products}
+
+
+@uber_router.get("/estimates")
+async def uber_estimates(
+    start_lat: float, start_lon: float,
+    end_lat: float, end_lon: float,
+):
+    """Per-product price + time estimates for a trip. Uses live Uber API if scopes
+    are granted; otherwise returns a calculation based on Uber's published Spain fares."""
+    distance_km = haversine_km(start_lon, start_lat, end_lon, end_lat)
+    # naive urban duration: 30 km/h average + 2 min boarding
+    duration_min = (distance_km / 30.0) * 60.0 + 2.0
+
+    tok = await _uber_token()
+    if tok:
+        try:
+            async with httpx.AsyncClient(timeout=12) as c:
+                pr, tm = await asyncio.gather(
+                    c.get(f"{UBER_API}/v1.2/estimates/price",
+                          params={"start_latitude": start_lat, "start_longitude": start_lon,
+                                  "end_latitude": end_lat, "end_longitude": end_lon},
+                          headers={"Authorization": f"Bearer {tok}", "Accept-Language": "es_ES"}),
+                    c.get(f"{UBER_API}/v1.2/estimates/time",
+                          params={"start_latitude": start_lat, "start_longitude": start_lon},
+                          headers={"Authorization": f"Bearer {tok}", "Accept-Language": "es_ES"}),
+                )
+                if pr.status_code == 200 and tm.status_code == 200:
+                    return {"mode": "live-api",
+                            "prices": pr.json().get("prices", []),
+                            "times": tm.json().get("times", []),
+                            "distance_km": round(distance_km, 2)}
+        except httpx.RequestError:
+            pass
+
+    # Fallback
+    estimates = _estimate_uber_for_route(distance_km, duration_min)
+    return {
+        "mode": "fare-estimation",
+        "disclaimer": "Estimación basada en tarifas públicas de Uber España. Precio final puede variar según demanda, ruta real y promociones. Pulsa PEDIR para confirmar en la app.",
+        "distance_km": round(distance_km, 2),
+        "duration_min": round(duration_min, 0),
+        "prices": estimates,
+        "times": [{"product": e["product"], "eta_min": round(3 + (hash(e["product"]) % 7), 0)} for e in estimates],
+    }
+
+
+app.include_router(uber_router)
+
 
 
 

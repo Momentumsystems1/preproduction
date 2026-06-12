@@ -1004,7 +1004,7 @@ export default function CommandCenter() {
           routeLoading={routeLoading}
           onRun={runRoute}
           onClear={() => { clearRoute(); setRouteFrom(""); setRouteTo(""); }}
-          onClose={() => { setShowRoutePanel(false); clearRoute(); }}
+          onClose={() => setShowRoutePanel(false)}
         />
       )}
 
