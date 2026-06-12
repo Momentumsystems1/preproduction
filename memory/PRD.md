@@ -53,13 +53,28 @@ Refactor of an existing tool that connects to DATEX DGT 3.0 and Servei Català d
 - [x] Madrid municipal events
 - [x] 3D / Satellite / Normal map
 - [x] Parking nearby (OSM Overpass)
-- [x] Measure tool with live cursor tracking
+- [x] Measure tool with live cursor tracking (fixed anchor drift on zoom)
 - [x] Pegasus Gate Diagnostic HUD style
 - [x] Geocoding search
 - [x] Multi-city support (10 Spanish cities)
-- [x] Density heatmap (MapLibre heatmap layer, weighted by severity)
-- [x] OSRM route optimizer (car/truck/bike/foot, distance + ETA + CO₂ estimate)
-- [x] Export GeoJSON (full features) + Export PDF tactical report (jsPDF)
+- [x] Density heatmap (MapLibre, weighted by severity)
+- [x] OSRM route optimizer (car/truck/bike/foot)
+- [x] Export GeoJSON + Export PDF tactical report
+- [x] **Azure Maps mobility stack** (subscription-key proxied via /api/azure/*):
+  - Traffic Flow tile (live road speeds)
+  - Traffic Incident tile + Detail JSON
+  - Weather Radar tile + Current Conditions chip + Severe Alerts
+  - Microsoft Imagery satellite tile
+  - Route Directions with live traffic + EV consumption model
+  - Route Range (isochrones)
+  - POI Search + EV Charging Stations search (with connector filter)
+  - Timezone by coordinates
+
+## Security & ops
+- All Azure traffic mediated by FastAPI proxy. Subscription key only in backend/.env.
+- httpx without verify=False (real TLS verification).
+- All popup/marker HTML rendered via DOM API (no innerHTML).
+- In-memory cache 60–300 s per Azure endpoint type.
 
 ## P1 / Backlog
 - Mapillary street view inspection (token required)

@@ -19,3 +19,35 @@ export const geocode = (q) => api.get("/geocode", { params: { q } }).then((r) =>
 
 export const fetchRoute = (from_q, to_q, mode = "car") =>
   api.get("/route", { params: { from: from_q, to: to_q, mode } }).then((r) => r.data);
+
+// ----- Azure Maps proxy endpoints -----
+export const azureStatus = () => api.get("/azure/status").then((r) => r.data);
+
+export const azureRoute = (from_q, to_q, mode = "car", traffic = true, extra = {}) =>
+  api.get("/azure/route", {
+    params: { from: from_q, to: to_q, mode, traffic, ...extra },
+  }).then((r) => r.data);
+
+export const azureRange = (lat, lon, minutes = 15, mode = "car") =>
+  api.get("/azure/range", { params: { lat, lon, minutes, mode } }).then((r) => r.data);
+
+export const azureSearchEV = (lat, lon, radius = 10000, limit = 50, connector = undefined) =>
+  api.get("/azure/search/ev", { params: { lat, lon, radius, limit, connector } }).then((r) => r.data);
+
+export const azureSearchPOI = (q, lat, lon, radius = 5000, limit = 30) =>
+  api.get("/azure/search/poi", { params: { q, lat, lon, radius, limit } }).then((r) => r.data);
+
+export const azureIncidents = (bbox, zoom = 11) =>
+  api.get("/azure/incidents", { params: { bbox, zoom } }).then((r) => r.data);
+
+export const azureWeatherCurrent = (lat, lon) =>
+  api.get("/azure/weather/current", { params: { lat, lon } }).then((r) => r.data);
+
+export const azureWeatherAlerts = (lat, lon) =>
+  api.get("/azure/weather/alerts", { params: { lat, lon } }).then((r) => r.data);
+
+// Returns absolute URL for Azure tile proxy (used by MapLibre tile sources)
+export const azureTileUrl = (kind) => {
+  const base = `${BACKEND_URL}/api/azure/tile/${kind}`;
+  return `${base}/{z}/{x}/{y}`;
+};

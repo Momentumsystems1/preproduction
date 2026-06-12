@@ -7,10 +7,11 @@ import {
 } from "lucide-react";
 
 import { STYLES } from "@/lib/mapStyles";
-import { fetchEvents, fetchParking, fetchCities, fetchHealth, geocode, fetchRoute } from "@/lib/api";
+import { fetchEvents, fetchParking, fetchCities, fetchHealth, geocode, fetchRoute, azureTileUrl } from "@/lib/api";
 import { KIND_ICON, KIND_GLYPH, KIND_LABEL, SEV_COLOR, SUBROUTINES, fmtTime, pad } from "@/lib/hudConstants";
 import { KPI, EventRow, EventDetail, Tel, StatusPill, SourceBadge } from "@/components/HudPrimitives";
 import RoutePanel from "@/components/RoutePanel";
+import { AzureToolbar, WeatherChip, EVPanel } from "@/components/AzureStack";
 import jsPDF from "jspdf";
 
 export default function CommandCenter() {
@@ -44,6 +45,13 @@ export default function CommandCenter() {
   const [routeResult, setRouteResult] = useState(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+
+  // Azure Maps stack toggles
+  const [showAzureFlow, setShowAzureFlow] = useState(false);
+  const [showAzureIncidents, setShowAzureIncidents] = useState(false);
+  const [showAzureWeather, setShowAzureWeather] = useState(false);
+  const [showAzureSat, setShowAzureSat] = useState(false);
+  const [showEVPanel, setShowEVPanel] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterKind, setFilterKind] = useState("all");
   const [pitch, setPitch] = useState(0);
@@ -118,6 +126,11 @@ export default function CommandCenter() {
       }
       renderEventMarkers(eventsData);
       renderParkingMarkers(parkingData);
+      // Restore Azure raster overlays after style swap
+      ensureAzureLayer("flow", showAzureFlow);
+      ensureAzureLayer("incident", showAzureIncidents);
+      ensureAzureLayer("weather", showAzureWeather);
+      ensureAzureLayer("satellite", showAzureSat);
     });
     addLog(`[VIEW] Switching render mode → ${mapStyle.toUpperCase()}`, "info");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -361,6 +374,47 @@ export default function CommandCenter() {
     if (measureMode) { clearMeasure(); setMeasureMode(false); addLog("[TOOL] Measure tool disabled", "info"); }
     else { setMeasureMode(true); addLog("[TOOL] Measure tool armed · click points on map", "info"); }
   };
+
+  // ---- Azure raster tile layers ----
+  const ensureAzureLayer = useCallback((kind, visible) => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    const srcId = `azure-${kind}-src`;
+    const layerId = `azure-${kind}-layer`;
+    const hasSrc = !!map.getSource(srcId);
+    if (visible) {
+      if (!hasSrc) {
+        map.addSource(srcId, {
+          type: "raster",
+          tiles: [azureTileUrl(kind)],
+          tileSize: 256,
+          attribution: "© Microsoft Azure Maps",
+        });
+        // satellite goes below everything; others above basemap
+        map.addLayer({
+          id: layerId,
+          type: "raster",
+          source: srcId,
+          paint: { "raster-opacity": kind === "weather" ? 0.65 : kind === "satellite" ? 1.0 : 0.85 },
+        });
+      } else if (!map.getLayer(layerId)) {
+        map.addLayer({
+          id: layerId,
+          type: "raster",
+          source: srcId,
+          paint: { "raster-opacity": kind === "weather" ? 0.65 : kind === "satellite" ? 1.0 : 0.85 },
+        });
+      }
+    } else {
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
+      if (map.getSource(srcId)) map.removeSource(srcId);
+    }
+  }, []);
+
+  useEffect(() => { ensureAzureLayer("flow", showAzureFlow); }, [showAzureFlow, ensureAzureLayer, mapStyle]);
+  useEffect(() => { ensureAzureLayer("incident", showAzureIncidents); }, [showAzureIncidents, ensureAzureLayer, mapStyle]);
+  useEffect(() => { ensureAzureLayer("weather", showAzureWeather); }, [showAzureWeather, ensureAzureLayer, mapStyle]);
+  useEffect(() => { ensureAzureLayer("satellite", showAzureSat); }, [showAzureSat, ensureAzureLayer, mapStyle]);
 
   // ---- heatmap ----
   const HEATMAP_SOURCE = "heatmap-events";
@@ -848,6 +902,14 @@ export default function CommandCenter() {
               ▸ MEASURED {Math.round(measureDistance)}m · {(measureDistance / 1000).toFixed(3)}km
             </div>
           )}
+
+          <AzureToolbar
+            showFlow={showAzureFlow} onToggleFlow={() => { setShowAzureFlow((v) => !v); addLog(`[AZURE] Traffic flow ${!showAzureFlow ? "engaged" : "disabled"}`, "info"); }}
+            showAzureIncidents={showAzureIncidents} onToggleAzureIncidents={() => { setShowAzureIncidents((v) => !v); addLog(`[AZURE] Incident tiles ${!showAzureIncidents ? "engaged" : "disabled"}`, "info"); }}
+            showWeatherRadar={showAzureWeather} onToggleWeatherRadar={() => { setShowAzureWeather((v) => !v); addLog(`[AZURE] Weather radar ${!showAzureWeather ? "engaged" : "disabled"}`, "info"); }}
+            showSatellite={showAzureSat} onToggleSatellite={() => { setShowAzureSat((v) => !v); addLog(`[AZURE] MS satellite ${!showAzureSat ? "engaged" : "disabled"}`, "info"); }}
+            onOpenEV={() => { setShowEVPanel((v) => !v); addLog(`[AZURE] EV stations panel ${!showEVPanel ? "open" : "closed"}`, "info"); }}
+          />
         </div>
       </header>
 
@@ -862,6 +924,18 @@ export default function CommandCenter() {
           onRun={runRoute}
           onClear={() => { clearRoute(); setRouteFrom(""); setRouteTo(""); }}
           onClose={() => { setShowRoutePanel(false); clearRoute(); }}
+        />
+      )}
+
+      {/* ===== EV CHARGING STATIONS ===== */}
+      {showEVPanel && (
+        <EVPanel
+          lat={mapCenter.lat} lon={mapCenter.lng}
+          onClose={() => setShowEVPanel(false)}
+          onPick={(s) => {
+            mapRef.current?.flyTo({ center: [s.lon, s.lat], zoom: 16, duration: 1000 });
+            addLog(`[EV  ] Locked on ${s.name}`, "ok");
+          }}
         />
       )}
 
@@ -937,6 +1011,9 @@ export default function CommandCenter() {
         <div className="flex-1 overflow-y-auto">
           {!selected && (
             <>
+              {/* Live Azure weather + alerts (powered by Azure Maps) */}
+              <WeatherChip lat={mapCenter.lat} lon={mapCenter.lng} />
+
               {/* Chevron diagnostics like atlantis */}
               <div className="px-3 py-3 border-b border-cyan-500/15">
                 <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 mb-2">CHEVRON ANALYSIS</div>

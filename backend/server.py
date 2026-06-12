@@ -3,7 +3,7 @@ Momentum Road Command Center - Backend API
 Proxies DGT 3.0 (DATEX2), Servei Català de Trànsit (SCT), Madrid open data,
 OSM (Overpass), Nominatim geocoding and OSRM routing.
 """
-from fastapi import FastAPI, APIRouter, HTTPException, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -513,6 +513,326 @@ async def health():
     }
 
 app.include_router(api_router)
+
+# ============================================================================
+# AZURE MAPS MOBILITY STACK · proxy endpoints
+# Keep the subscription key server-side; the browser only talks to /api/azure/*
+# ============================================================================
+AZURE_KEY = os.environ.get("AZURE_MAPS_KEY", "")
+AZURE_BASE = "https://atlas.microsoft.com"
+azure_router = APIRouter(prefix="/api/azure")
+
+
+def _azure_enabled() -> bool:
+    return bool(AZURE_KEY)
+
+
+async def _azure_get_tile(url: str) -> Response:
+    if not _azure_enabled():
+        raise HTTPException(status_code=503, detail="Azure Maps key not configured")
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(url, headers={"User-Agent": UA})
+            if r.status_code != 200:
+                raise HTTPException(status_code=r.status_code, detail="Azure tile error")
+            return Response(content=r.content,
+                            media_type=r.headers.get("content-type", "image/png"),
+                            headers={"Cache-Control": "private, max-age=120"})
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Azure unreachable: {e}")
+
+
+async def _azure_get_json(url: str, ttl: int = 60) -> Any:
+    if not _azure_enabled():
+        raise HTTPException(status_code=503, detail="Azure Maps key not configured")
+    cached = cache_get(url, ttl)
+    if cached is not None:
+        return cached
+    try:
+        async with httpx.AsyncClient(timeout=18) as c:
+            r = await c.get(url, headers={"User-Agent": UA})
+            if r.status_code != 200:
+                raise HTTPException(status_code=r.status_code,
+                                    detail=f"Azure API error {r.status_code}: {r.text[:200]}")
+            data = r.json()
+            cache_set(url, data)
+            return data
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Azure unreachable: {e}")
+
+
+@azure_router.get("/status")
+async def azure_status():
+    return {"enabled": _azure_enabled(),
+            "services": ["traffic-flow", "traffic-incident", "weather-radar",
+                         "basemap-satellite", "route", "range",
+                         "search-poi", "ev-charging", "weather-alerts",
+                         "incident-detail", "timezone"]}
+
+
+# ----- TILE PROXIES (raster PNG) -----
+
+@azure_router.get("/tile/flow/{z}/{x}/{y}")
+async def azure_tile_flow(z: int, x: int, y: int, style: str = "relative"):
+    url = (f"{AZURE_BASE}/traffic/flow/tile/png?api-version=1.0"
+           f"&style={style}&zoom={z}&x={x}&y={y}"
+           f"&subscription-key={AZURE_KEY}")
+    return await _azure_get_tile(url)
+
+
+@azure_router.get("/tile/incident/{z}/{x}/{y}")
+async def azure_tile_incident(z: int, x: int, y: int, style: str = "night"):
+    url = (f"{AZURE_BASE}/traffic/incident/tile/png?api-version=1.0"
+           f"&style={style}&zoom={z}&x={x}&y={y}"
+           f"&subscription-key={AZURE_KEY}")
+    return await _azure_get_tile(url)
+
+
+@azure_router.get("/tile/weather/{z}/{x}/{y}")
+async def azure_tile_weather(z: int, x: int, y: int, tileset: str = "microsoft.weather.radar.main"):
+    url = (f"{AZURE_BASE}/map/tile?api-version=2024-04-01"
+           f"&tilesetId={tileset}&zoom={z}&x={x}&y={y}"
+           f"&subscription-key={AZURE_KEY}")
+    return await _azure_get_tile(url)
+
+
+@azure_router.get("/tile/satellite/{z}/{x}/{y}")
+async def azure_tile_satellite(z: int, x: int, y: int):
+    url = (f"{AZURE_BASE}/map/tile?api-version=2024-04-01"
+           f"&tilesetId=microsoft.imagery&zoom={z}&x={x}&y={y}"
+           f"&subscription-key={AZURE_KEY}")
+    return await _azure_get_tile(url)
+
+
+# ----- TRAFFIC INCIDENT DETAIL (vector / JSON) -----
+
+@azure_router.get("/incidents")
+async def azure_incidents(
+    bbox: str = Query(..., description="lat_max,lon_min,lat_min,lon_max"),
+    zoom: int = Query(11, ge=0, le=22),
+):
+    """Detailed Azure Maps incidents within a bounding box, normalized to our event schema."""
+    url = (f"{AZURE_BASE}/traffic/incident/detail/json?api-version=1.0"
+           f"&style=s3&boundingbox={bbox}&boundingZoom={zoom}"
+           f"&trafficmodelid=-1&subscription-key={AZURE_KEY}")
+    data = await _azure_get_json(url, ttl=60)
+    features = []
+    icon_map = {0: "incidencia", 1: "accidente", 2: "peligro", 3: "peligro",
+                4: "peligro", 6: "congestion", 7: "obras", 8: "meteo",
+                9: "obras", 10: "peligro", 14: "accidente"}
+    sev_map = {0: "info", 1: "warning", 2: "warning", 3: "warning",
+               4: "critical", 5: "critical"}
+    for idx, p in enumerate(data.get("tm", {}).get("poi", [])):
+        try:
+            lat = float(p.get("p", {}).get("y"))
+            lon = float(p.get("p", {}).get("x"))
+        except (TypeError, ValueError):
+            continue
+        ic = p.get("ic", 0)
+        ty = p.get("ty", 0)
+        kind = icon_map.get(ic, "incidencia")
+        features.append({
+            "id": f"AZ-{p.get('id', idx)}",
+            "lat": lat, "lon": lon,
+            "road": p.get("rdn") or p.get("f") or "Azure",
+            "title": p.get("d") or "Incidencia",
+            "description": p.get("d") or "Azure Maps incident",
+            "kind": kind,
+            "severity": sev_map.get(ty, "info"),
+            "delay_s": p.get("dl"),
+            "length_m": p.get("l"),
+            "source": "Azure Maps",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    return {"status": "OK", "count": len(features), "features": features,
+            "generated_at": datetime.now(timezone.utc).isoformat()}
+
+
+# ----- ROUTE DIRECTIONS with live traffic + EV -----
+
+@azure_router.get("/route")
+async def azure_route(
+    from_q: str = Query(..., alias="from", description="lat,lon"),
+    to_q: str = Query(..., alias="to", description="lat,lon"),
+    mode: str = Query("car"),
+    traffic: bool = Query(True),
+    ev_max_kwh: Optional[float] = Query(None),
+    ev_current_kwh: Optional[float] = Query(None),
+):
+    """Azure Route Directions with live traffic. Supports car, truck, bus, bicycle,
+    pedestrian, motorcycle, taxi, van + optional EV consumption model."""
+    mode_map = {"car": "car", "truck": "truck", "bus": "bus", "bike": "bicycle",
+                "foot": "pedestrian", "motorcycle": "motorcycle", "taxi": "taxi",
+                "van": "van", "ev": "car"}
+    travel_mode = mode_map.get(mode, "car")
+    url = (f"{AZURE_BASE}/route/directions/json?api-version=1.0"
+           f"&query={from_q}:{to_q}&travelMode={travel_mode}"
+           f"&traffic={'true' if traffic else 'false'}"
+           f"&instructionsType=text&language=es-ES"
+           f"&subscription-key={AZURE_KEY}")
+    if mode == "ev" and ev_max_kwh:
+        url += (f"&vehicleEngineType=electric"
+                f"&constantSpeedConsumptionInkWhPerHundredkm=50,8.2:130,21.3"
+                f"&maxChargeInkWh={ev_max_kwh}")
+        if ev_current_kwh:
+            url += f"&currentChargeInkWh={ev_current_kwh}"
+    data = await _azure_get_json(url, ttl=30)
+    if not data.get("routes"):
+        raise HTTPException(status_code=404, detail="No route from Azure")
+    r = data["routes"][0]
+    summary = r.get("summary", {})
+    # build LineString from legs
+    coords = []
+    for leg in r.get("legs", []):
+        for pt in leg.get("points", []):
+            coords.append([pt["longitude"], pt["latitude"]])
+    return {
+        "mode": mode,
+        "distance_m": summary.get("lengthInMeters"),
+        "duration_s": summary.get("travelTimeInSeconds"),
+        "distance_km": round((summary.get("lengthInMeters") or 0) / 1000, 2),
+        "duration_min": round((summary.get("travelTimeInSeconds") or 0) / 60, 1),
+        "traffic_delay_s": summary.get("trafficDelayInSeconds", 0),
+        "traffic_delay_min": round((summary.get("trafficDelayInSeconds") or 0) / 60, 1),
+        "departure_time": summary.get("departureTime"),
+        "arrival_time": summary.get("arrivalTime"),
+        "battery_consumption_kwh": summary.get("batteryConsumptionInkWh"),
+        "geometry": {"type": "LineString", "coordinates": coords},
+        "source": "Azure Maps · Route Directions",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ----- ROUTE RANGE (isochrone) -----
+
+@azure_router.get("/range")
+async def azure_range(
+    lat: float, lon: float,
+    minutes: int = Query(15, ge=1, le=120),
+    mode: str = Query("car"),
+):
+    mode_map = {"car": "car", "truck": "truck", "bike": "bicycle", "foot": "pedestrian"}
+    url = (f"{AZURE_BASE}/route/range/json?api-version=1.0"
+           f"&query={lat},{lon}&timeBudgetInSec={minutes * 60}"
+           f"&travelMode={mode_map.get(mode, 'car')}"
+           f"&traffic=true&subscription-key={AZURE_KEY}")
+    data = await _azure_get_json(url, ttl=120)
+    polygon = data.get("reachableRange", {}).get("boundary", [])
+    coords = [[p["longitude"], p["latitude"]] for p in polygon]
+    if coords and coords[0] != coords[-1]:
+        coords.append(coords[0])
+    return {
+        "minutes": minutes,
+        "mode": mode,
+        "center": data.get("reachableRange", {}).get("center"),
+        "geometry": {"type": "Polygon", "coordinates": [coords]},
+        "source": "Azure Maps · Route Range",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ----- SEARCH POI / Charging stations -----
+
+@azure_router.get("/search/poi")
+async def azure_search_poi(
+    q: str,
+    lat: float, lon: float,
+    radius: int = Query(5000, ge=100, le=50000),
+    limit: int = Query(30, ge=1, le=100),
+):
+    url = (f"{AZURE_BASE}/search/poi/json?api-version=1.0"
+           f"&query={q}&lat={lat}&lon={lon}&radius={radius}"
+           f"&limit={limit}&countrySet=ES&language=es-ES"
+           f"&subscription-key={AZURE_KEY}")
+    data = await _azure_get_json(url, ttl=300)
+    return {"count": data.get("summary", {}).get("totalResults", 0),
+            "results": data.get("results", []),
+            "source": "Azure Maps · Search POI"}
+
+
+@azure_router.get("/search/ev")
+async def azure_search_ev(
+    lat: float, lon: float,
+    radius: int = Query(10000, ge=500, le=50000),
+    limit: int = Query(50, ge=1, le=100),
+    connector: Optional[str] = Query(None, description="IEC62196Type2CCS, CHAdeMO, Tesla..."),
+):
+    # Electric Vehicle Station category id = 7309
+    url = (f"{AZURE_BASE}/search/poi/category/json?api-version=1.0"
+           f"&query=ev%20charging&lat={lat}&lon={lon}&radius={radius}"
+           f"&categorySet=7309&limit={limit}&countrySet=ES&language=es-ES"
+           f"&subscription-key={AZURE_KEY}")
+    if connector:
+        url += f"&connectorSet={connector}"
+    data = await _azure_get_json(url, ttl=300)
+    stations = []
+    for r in data.get("results", []):
+        poi = r.get("poi", {})
+        addr = r.get("address", {})
+        pos = r.get("position", {})
+        ev = poi.get("chargingPark", {})
+        connectors = []
+        total_plugs = 0
+        for c in ev.get("connectors", []):
+            ct = c.get("connectorType")
+            cnt = c.get("ratedPowerKW")
+            connectors.append({"type": ct, "kw": cnt})
+            total_plugs += 1
+        stations.append({
+            "id": r.get("id"),
+            "name": poi.get("name", "EV Charger"),
+            "brand": (poi.get("brands") or [{}])[0].get("name") if poi.get("brands") else None,
+            "address": addr.get("freeformAddress"),
+            "lat": pos.get("lat"), "lon": pos.get("lon"),
+            "connectors": connectors,
+            "total_connectors": total_plugs,
+            "phone": poi.get("phone"),
+            "url": poi.get("url"),
+        })
+    return {"count": len(stations), "stations": stations,
+            "source": "Azure Maps · EV Stations"}
+
+
+# ----- WEATHER SEVERE ALERTS -----
+
+@azure_router.get("/weather/alerts")
+async def azure_weather_alerts(lat: float, lon: float):
+    url = (f"{AZURE_BASE}/weather/severe/alerts/json?api-version=1.1"
+           f"&query={lat},{lon}&language=es-ES"
+           f"&subscription-key={AZURE_KEY}")
+    data = await _azure_get_json(url, ttl=300)
+    return {"count": len(data.get("results", [])),
+            "alerts": data.get("results", []),
+            "source": "Azure Maps · Weather Severe Alerts"}
+
+
+# ----- WEATHER CURRENT -----
+
+@azure_router.get("/weather/current")
+async def azure_weather_current(lat: float, lon: float):
+    url = (f"{AZURE_BASE}/weather/currentConditions/json?api-version=1.1"
+           f"&query={lat},{lon}&language=es-ES"
+           f"&subscription-key={AZURE_KEY}")
+    data = await _azure_get_json(url, ttl=300)
+    res = (data.get("results") or [{}])[0]
+    return {
+        "phrase": res.get("phrase"),
+        "temperature_c": (res.get("temperature") or {}).get("value"),
+        "real_feel_c": (res.get("realFeelTemperature") or {}).get("value"),
+        "humidity": res.get("relativeHumidity"),
+        "wind_kph": (res.get("wind") or {}).get("speed", {}).get("value"),
+        "wind_dir": (res.get("wind") or {}).get("direction", {}).get("localizedDescription"),
+        "visibility_km": (res.get("visibility") or {}).get("value"),
+        "uv_index": res.get("uvIndex"),
+        "uv_phrase": res.get("uvIndexPhrase"),
+        "icon": res.get("iconCode"),
+        "is_day": res.get("isDayTime"),
+        "source": "Azure Maps · Weather",
+    }
+
+
+app.include_router(azure_router)
+
 
 app.add_middleware(
     CORSMiddleware,
