@@ -862,6 +862,162 @@ async def azure_weather_current(lat: float, lon: float):
 app.include_router(azure_router)
 
 
+# ============================================================================
+# MOBILITY HUB · CityBikes aggregator + deep-link helpers
+# Aggregates GBFS-compatible networks (Bicing, BiciMAD, Sevici, Cooltra, ...).
+# Free public API: https://api.citybik.es/v2
+# ============================================================================
+CITYBIKES = "https://api.citybik.es/v2"
+mobility_router = APIRouter(prefix="/api/mobility")
+
+
+def _km_between(a_lat: float, a_lon: float, b_lat: float, b_lon: float) -> float:
+    return haversine_km(a_lon, a_lat, b_lon, b_lat)
+
+
+@mobility_router.get("/networks")
+async def mobility_networks(country: str = Query("ES")):
+    """Lightweight list of all bike/scooter networks for a country."""
+    raw = cache_get(f"cb_networks_{country}", ttl=86400)
+    if not raw:
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(f"{CITYBIKES}/networks?fields=id,name,location,company",
+                                headers={"User-Agent": UA})
+                raw = r.json() if r.status_code == 200 else {"networks": []}
+                cache_set(f"cb_networks_{country}", raw)
+        except httpx.RequestError as e:
+            logger.warning(f"CityBikes networks failed: {e}")
+            raw = {"networks": []}
+    nets = [n for n in raw.get("networks", []) if n.get("location", {}).get("country") == country]
+    return {"count": len(nets), "networks": nets}
+
+
+@mobility_router.get("/stations")
+async def mobility_stations_near(
+    lat: float, lon: float,
+    radius_km: float = Query(5.0, ge=0.1, le=50),
+    country: str = Query("ES"),
+):
+    """Return all bike-share / scooter stations within radius_km of (lat,lon)
+    across every GBFS-compatible network in the requested country."""
+    nets_data = await mobility_networks(country=country)
+    nearby_nets = []
+    for n in nets_data.get("networks", []):
+        loc = n.get("location", {}) or {}
+        if "latitude" in loc and "longitude" in loc:
+            if _km_between(lat, lon, loc["latitude"], loc["longitude"]) <= radius_km + 30:
+                nearby_nets.append(n)
+
+    async def fetch_one(net_id: str) -> List[Dict[str, Any]]:
+        key = f"cb_net_{net_id}"
+        d = cache_get(key, ttl=60)
+        if not d:
+            try:
+                async with httpx.AsyncClient(timeout=15) as c:
+                    r = await c.get(f"{CITYBIKES}/networks/{net_id}", headers={"User-Agent": UA})
+                    if r.status_code == 200:
+                        d = r.json()
+                        cache_set(key, d)
+            except httpx.RequestError:
+                return []
+        if not d:
+            return []
+        out = []
+        net_meta = d.get("network", {})
+        for s in net_meta.get("stations", []):
+            slat, slon = s.get("latitude"), s.get("longitude")
+            if slat is None or slon is None:
+                continue
+            dist = _km_between(lat, lon, slat, slon)
+            if dist > radius_km:
+                continue
+            ex = s.get("extra", {}) or {}
+            out.append({
+                "id": f"{net_id}::{s.get('id')}",
+                "network": net_id,
+                "network_name": net_meta.get("name") or net_meta.get("company", ["?"])[0] if isinstance(net_meta.get("company"), list) else net_meta.get("company"),
+                "name": s.get("name"),
+                "lat": slat, "lon": slon,
+                "bikes": s.get("free_bikes") or 0,
+                "slots": s.get("empty_slots") or 0,
+                "ebikes": ex.get("ebikes") or ex.get("normal_ebikes") or 0,
+                "address": ex.get("address"),
+                "distance_m": int(dist * 1000),
+                "online": ex.get("online", True),
+            })
+        return out
+
+    results = await asyncio.gather(*(fetch_one(n["id"]) for n in nearby_nets), return_exceptions=True)
+    stations: List[Dict[str, Any]] = []
+    for r in results:
+        if isinstance(r, list):
+            stations.extend(r)
+    stations.sort(key=lambda x: x["distance_m"])
+    by_net: Dict[str, int] = {}
+    for s in stations:
+        by_net[s["network"]] = by_net.get(s["network"], 0) + 1
+    return {
+        "count": len(stations),
+        "networks_count": len(by_net),
+        "by_network": by_net,
+        "stations": stations,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@mobility_router.get("/ride/deeplinks")
+async def ride_deeplinks(
+    from_lat: float, from_lon: float,
+    to_lat: Optional[float] = None, to_lon: Optional[float] = None,
+    label_from: Optional[str] = "Mi ubicación",
+    label_to: Optional[str] = "Destino",
+):
+    """Universal HTTPS deep-links for ride-hailing apps. Open on web or fall through to mobile app."""
+    def has_dest() -> bool:
+        return to_lat is not None and to_lon is not None
+
+    links = []
+    # Uber
+    uber = (f"https://m.uber.com/ul/?action=setPickup"
+            f"&pickup[latitude]={from_lat}&pickup[longitude]={from_lon}"
+            f"&pickup[nickname]={label_from}")
+    if has_dest():
+        uber += (f"&dropoff[latitude]={to_lat}&dropoff[longitude]={to_lon}"
+                 f"&dropoff[nickname]={label_to}")
+    links.append({"provider": "Uber", "url": uber, "kind": "ride-hailing", "color": "#000000"})
+    # Cabify (universal link)
+    cabify = (f"https://cabify.com/es/madrid/?start_lat={from_lat}&start_lng={from_lon}")
+    if has_dest():
+        cabify += f"&end_lat={to_lat}&end_lng={to_lon}"
+    links.append({"provider": "Cabify", "url": cabify, "kind": "ride-hailing", "color": "#7036ff"})
+    # Bolt
+    bolt = (f"https://bolt.eu/es-es/order-taxi/?pickup_latitude={from_lat}"
+            f"&pickup_longitude={from_lon}")
+    if has_dest():
+        bolt += f"&destination_latitude={to_lat}&destination_longitude={to_lon}"
+    links.append({"provider": "Bolt", "url": bolt, "kind": "ride-hailing", "color": "#34d186"})
+    # FreeNow
+    freenow = f"https://free-now.com/es/?lat={from_lat}&lng={from_lon}"
+    links.append({"provider": "FreeNow", "url": freenow, "kind": "taxi", "color": "#ffd400"})
+    # Google Maps directions (multi-modal)
+    if has_dest():
+        gmaps = (f"https://www.google.com/maps/dir/?api=1&origin={from_lat},{from_lon}"
+                 f"&destination={to_lat},{to_lon}&travelmode=transit")
+        links.append({"provider": "Transporte público (Google)", "url": gmaps,
+                      "kind": "transit", "color": "#4285f4"})
+    # Citymapper
+    cm = f"https://citymapper.com/directions?startcoord={from_lat},{from_lon}"
+    if has_dest():
+        cm += f"&endcoord={to_lat},{to_lon}"
+    links.append({"provider": "Citymapper", "url": cm, "kind": "multimodal", "color": "#0099ff"})
+    return {"count": len(links), "links": links}
+
+
+app.include_router(mobility_router)
+
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,

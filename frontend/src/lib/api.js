@@ -51,3 +51,12 @@ export const azureTileUrl = (kind) => {
   const base = `${BACKEND_URL}/api/azure/tile/${kind}`;
   return `${base}/{z}/{x}/{y}`;
 };
+
+// ----- Mobility hub (CityBikes GBFS aggregator + ride-hailing deep-links) -----
+export const fetchMobilityStations = (lat, lon, radius_km = 3.0, country = "ES") =>
+  api.get("/mobility/stations", { params: { lat, lon, radius_km, country } }).then((r) => r.data);
+
+export const fetchRideDeeplinks = (from_lat, from_lon, to_lat, to_lon) =>
+  api.get("/mobility/ride/deeplinks", {
+    params: { from_lat, from_lon, to_lat, to_lon },
+  }).then((r) => r.data);

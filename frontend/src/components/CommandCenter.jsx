@@ -3,16 +3,17 @@ import maplibregl from "maplibre-gl";
 import {
   Radio, Layers, Ruler, SquareParking, Search, RotateCw, Mountain, Satellite,
   Map as MapIcon, Activity, Crosshair, Loader2, Eye, X, Hexagon,
-  Flame, Download, Route, FileText, FileJson,
+  Flame, Download, Route, FileText, FileJson, Maximize2, Minimize2, Bike,
 } from "lucide-react";
 
 import { STYLES } from "@/lib/mapStyles";
-import { fetchEvents, fetchParking, fetchCities, fetchHealth, geocode, fetchRoute, azureTileUrl } from "@/lib/api";
+import { fetchEvents, fetchParking, fetchCities, fetchHealth, geocode, fetchRoute, azureTileUrl, fetchMobilityStations } from "@/lib/api";
 import { KIND_ICON, KIND_GLYPH, KIND_LABEL, SEV_COLOR, SUBROUTINES, fmtTime, pad } from "@/lib/hudConstants";
 import { KPI, EventRow, EventDetail, StatusPill, SourceBadge } from "@/components/HudPrimitives";
 import RoutePanel from "@/components/RoutePanel";
 import BottomDock from "@/components/BottomDock";
 import { AzureToolbar, WeatherChip, EVPanel } from "@/components/AzureStack";
+import MobilityHub from "@/components/MobilityHub";
 import jsPDF from "jspdf";
 
 export default function CommandCenter() {
@@ -53,6 +54,11 @@ export default function CommandCenter() {
   const [showAzureWeather, setShowAzureWeather] = useState(false);
   const [showAzureSat, setShowAzureSat] = useState(false);
   const [showEVPanel, setShowEVPanel] = useState(false);
+  const [showMobility, setShowMobility] = useState(false);
+  const [showMobilityHub, setShowMobilityHub] = useState(false);
+  const [mobilityData, setMobilityData] = useState(null);
+  const [focusMode, setFocusMode] = useState(false);
+  const mobilityMarkersRef = useRef([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterKind, setFilterKind] = useState("all");
   const [pitch, setPitch] = useState(0);
@@ -425,6 +431,61 @@ export default function CommandCenter() {
   useEffect(() => { ensureAzureLayer("weather", showAzureWeather); }, [showAzureWeather, ensureAzureLayer, mapStyle]);
   useEffect(() => { ensureAzureLayer("satellite", showAzureSat); }, [showAzureSat, ensureAzureLayer, mapStyle]);
 
+  // ---- Mobility (bike-share) markers ----
+  const renderMobilityMarkers = useCallback((data) => {
+    const map = mapRef.current;
+    if (!map) return;
+    mobilityMarkersRef.current.forEach((m) => m.remove());
+    mobilityMarkersRef.current = [];
+    if (!data || !showMobility) return;
+    data.stations.slice(0, 200).forEach((s) => {
+      const el = document.createElement("div");
+      el.style.cssText = `width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:700;color:#02101a;cursor:pointer;border:1px solid rgba(2,10,20,0.6);box-shadow:0 4px 10px rgba(0,0,0,0.4);background:${s.bikes > 3 ? "#4ade80" : s.bikes >= 1 ? "#fbbf24" : "#71717a"};border-radius:3px`;
+      el.setAttribute("data-testid", `mob-marker-${s.id}`);
+      const span = document.createElement("span");
+      span.textContent = String(s.bikes);
+      el.appendChild(span);
+      el.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        setSelected({
+          id: s.id, kind: "bicis", title: `${s.bikes} bicis disponibles`,
+          description: `${s.bikes} bicis libres · ${s.slots} huecos libres${s.ebikes ? ` · ${s.ebikes} eléctricas` : ""} · ${s.network_name}`,
+          source: s.network_name, road: s.name,
+          lat: s.lat, lon: s.lon, severity: "info",
+        });
+      });
+      const m = new maplibregl.Marker({ element: el }).setLngLat([s.lon, s.lat]).addTo(map);
+      mobilityMarkersRef.current.push(m);
+    });
+  }, [showMobility]);
+
+  useEffect(() => { renderMobilityMarkers(mobilityData); }, [mobilityData, showMobility, renderMobilityMarkers, mapStyle]);
+
+  const loadMobilityHere = useCallback(async () => {
+    const map = mapRef.current;
+    if (!map) return;
+    const c = map.getCenter();
+    addLog("[MOB ] Querying GBFS networks (CityBikes)...", "info");
+    try {
+      const d = await fetchMobilityStations(c.lat, c.lng, 3.0);
+      setMobilityData(d);
+      addLog(`[MOB ] ${d.count} stations across ${d.networks_count} networks`, "ok");
+    } catch (e) {
+      addLog(`[ERR ] Mobility fetch failed: ${e.message}`, "err");
+    }
+  }, [addLog]);
+
+  const toggleMobility = useCallback(() => {
+    if (showMobility) {
+      setShowMobility(false);
+      setMobilityData(null);
+      addLog("[MOB ] Mobility layer disabled", "info");
+    } else {
+      setShowMobility(true);
+      loadMobilityHere();
+    }
+  }, [showMobility, loadMobilityHere, addLog]);
+
   // ---- heatmap ----
   const HEATMAP_SOURCE = "heatmap-events";
   const HEATMAP_LAYER = "heatmap-events-layer";
@@ -584,14 +645,14 @@ export default function CommandCenter() {
 
     // background header
     doc.setFillColor(2, 10, 20);
-    doc.rect(0, 0, W, 90, "F");
+    doc.rect(0, 0, W, 90, "[ ESPERANDO DATOS ]");
     doc.setTextColor(34, 211, 238);
     doc.setFont("courier", "bold").setFontSize(18);
     doc.text("MOMENTUM ROAD COMMAND CENTER", 40, 38);
     doc.setFont("courier", "normal").setFontSize(9);
     doc.text("PEGASUS · GATE DIAGNOSTICS · TACTICAL REPORT", 40, 56);
     doc.setTextColor(125, 211, 252);
-    doc.text(`SECTOR: ${(eventsData.city || "—").toUpperCase()}    GENERATED: ${new Date().toISOString().replace("T", " ").slice(0, 19)} UTC`, 40, 74);
+    doc.text(`SECTOR: ${(eventsData.city || "—").toUpperCase()}    GENERATED: ${new Date().toISOString().replace("[ SIN INCIDENCIAS EN EL SECTOR ]", "[ SIN INCIDENCIAS EN EL SECTOR ]").slice(0, 19)} UTC`, 40, 74);
 
     // summary
     let y = 120;
@@ -667,7 +728,7 @@ export default function CommandCenter() {
       doc.text((f.id || "").slice(0, 14), 70, y);
       doc.text((f.kind || "").toUpperCase(), 150, y);
       doc.text((f.severity || "").toUpperCase(), 230, y);
-      doc.text((f.source || "").split(" ")[0], 280, y);
+      doc.text((f.source || "").split("[ SIN INCIDENCIAS EN EL SECTOR ]")[0], 280, y);
       doc.text((f.road || "").slice(0, 26), 360, y);
       doc.text(`${f.lat.toFixed(3)},${f.lon.toFixed(3)}`, 500, y);
       y += 12;
@@ -761,7 +822,7 @@ export default function CommandCenter() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                  placeholder="GEOCODE QUERY: dirección · carretera · punto operativo"
+                  placeholder="BÚSQUEDA: dirección, carretera, punto operativo"
                   className="bg-transparent outline-none text-xs font-mono flex-1 placeholder:text-cyan-700/70 text-cyan-100"
                 />
                 <button data-testid="search-go-btn" onClick={handleSearch}
@@ -793,7 +854,7 @@ export default function CommandCenter() {
             <button data-testid="refresh-btn" onClick={() => loadEvents(city)}
               className="flex items-center gap-1.5 px-3 py-2 mt-3 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/40 text-cyan-100 text-xs font-mono tracking-wide transition-colors">
               <RotateCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-              <span className="hidden md:inline">RELOAD</span>
+              <span className="hidden md:inline">RECARGAR</span>
             </button>
           </div>
 
@@ -850,6 +911,17 @@ export default function CommandCenter() {
             className={`flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono tracking-wide border transition-colors ${showParking ? "bg-cyan-400 text-[#020a14] border-cyan-400" : "bg-transparent border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10"}`}>
             {parkingLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <SquareParking className="w-3 h-3" />}
             PARKING {parkingData ? `[${parkingData.count}]` : ""}
+          </button>
+
+          <button data-testid="mobility-btn" onClick={toggleMobility}
+            className={`flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono tracking-wide border transition-colors ${showMobility ? "bg-cyan-400 text-[#020a14] border-cyan-400" : "bg-transparent border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10"}`}>
+            <Bike className="w-3 h-3" />
+            BICIS {mobilityData ? `[${mobilityData.count}]` : ""}
+          </button>
+
+          <button data-testid="mobility-hub-btn" onClick={() => setShowMobilityHub((v) => !v)}
+            className="flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono tracking-wide border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10">
+            <Bike className="w-3 h-3" /> HUB MOVILIDAD
           </button>
 
           <button data-testid="heatmap-btn" onClick={toggleHeatmap}
@@ -948,9 +1020,54 @@ export default function CommandCenter() {
         />
       )}
 
+      {/* ===== MOBILITY HUB ===== */}
+      {showMobilityHub && (
+        <MobilityHub
+          lat={mapCenter.lat} lon={mapCenter.lng}
+          toLat={routeResult?.to?.lat || null}
+          toLon={routeResult?.to?.lon || null}
+          onClose={() => setShowMobilityHub(false)}
+          onPickStation={(s) => {
+            mapRef.current?.flyTo({ center: [s.lon, s.lat], zoom: 16, duration: 1000 });
+            addLog(`[MOB ] ${s.bikes} bikes @ ${s.name}`, "ok");
+          }}
+        />
+      )}
+
+      {/* ===== FOCUS button (floating bottom-right when sidebars hidden) ===== */}
+      <button
+        data-testid="focus-toggle"
+        onClick={() => { setFocusMode((v) => !v); addLog(`[VIEW] Focus mode ${!focusMode ? "engaged · sala de control" : "disabled"}`, "info"); }}
+        className="absolute top-[160px] right-3 z-[58] p-2 bg-cyan-500/15 border border-cyan-500/40 hover:bg-cyan-500/30 backdrop-blur-md"
+        title={focusMode ? "Salir del modo presentación" : "Modo presentación / sala de control"}
+      >
+        {focusMode ? <Minimize2 className="w-4 h-4 text-cyan-200" /> : <Maximize2 className="w-4 h-4 text-cyan-200" />}
+      </button>
+
+      {/* ===== Focus mode floating KPIs ===== */}
+      {focusMode && eventsData && (
+        <div className="absolute top-[160px] left-3 z-[58] panel-solid brackets px-4 py-3 anim-fade-up" data-testid="focus-kpi">
+          <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 mb-2">SECTOR {(cities.find((c) => c.id === city)?.name || city).toUpperCase()} · LIVE</div>
+          <div className="flex gap-6">
+            <div>
+              <div className="font-mono text-[8px] tracking-[0.22em] text-cyan-500/80">SITREC</div>
+              <div className="font-mono text-3xl text-cyan-100 tabular-nums">{pad(eventsData.count)}</div>
+            </div>
+            <div>
+              <div className="font-mono text-[8px] tracking-[0.22em] text-cyan-500/80">RIESGO</div>
+              <div className={`font-mono text-3xl tabular-nums ${eventsData.risk === "ALTO" ? "text-red-400" : eventsData.risk === "MEDIO" ? "text-amber-400" : "text-emerald-400"}`}>{eventsData.risk}</div>
+            </div>
+            <div>
+              <div className="font-mono text-[8px] tracking-[0.22em] text-cyan-500/80">CRÍT</div>
+              <div className="font-mono text-3xl text-red-400 tabular-nums">{pad(eventsData.severity?.critical || 0, 3)}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ===== LEFT PANEL ===== */}
       <aside
-        className="absolute left-3 top-[150px] bottom-[200px] w-[340px] z-40 panel brackets flex flex-col anim-fade-up"
+        className={`absolute left-3 top-[150px] bottom-[200px] w-[340px] z-40 panel brackets flex-col anim-fade-up ${focusMode ? "hidden" : "hidden lg:flex"}`}
         data-testid="left-panel"
       >
         <div className="section-head"><span>SUBSYSTEM ANALYSIS · ALPHA V.2</span><span className="text-cyan-300/60">{pad(kpi.count)}</span></div>
@@ -1012,10 +1129,10 @@ export default function CommandCenter() {
 
       {/* ===== RIGHT PANEL ===== */}
       <aside
-        className="absolute right-3 top-[150px] bottom-[200px] w-[340px] z-40 panel brackets flex flex-col anim-fade-up"
+        className={`absolute right-3 top-[150px] bottom-[200px] w-[340px] z-40 panel brackets flex-col anim-fade-up ${focusMode ? "hidden" : "hidden lg:flex"}`}
         data-testid="right-panel"
       >
-        <div className="section-head"><span>{selected ? "TARGET ANALYSIS" : "GR MATRIX · LIVE OPS"}</span><span className="text-cyan-300/60">▣</span></div>
+        <div className="section-head"><span>{selected ? "ANÁLISIS DEL OBJETIVO" : "OPERATIVA EN VIVO"}</span><span className="text-cyan-300/60">▣</span></div>
 
         <div className="flex-1 overflow-y-auto">
           {!selected && (
@@ -1075,17 +1192,21 @@ export default function CommandCenter() {
       </aside>
 
       {/* ===== BOTTOM TABULAR PANEL ===== */}
-      <BottomDock
-        logs={logs}
-        features={filteredFeatures}
-        onPickFeature={(f) => {
-          setSelected(f);
-          mapRef.current?.flyTo({ center: [f.lon, f.lat], zoom: 14 });
-        }}
-        mapCenter={mapCenter}
-        zoom={zoom} pitch={pitch} bearing={bearing}
-        mapStyle={mapStyle} lastUpdate={lastUpdate}
-      />
+      {!focusMode && (
+        <div className="hidden md:block">
+          <BottomDock
+            logs={logs}
+            features={filteredFeatures}
+            onPickFeature={(f) => {
+              setSelected(f);
+              mapRef.current?.flyTo({ center: [f.lon, f.lat], zoom: 14 });
+            }}
+            mapCenter={mapCenter}
+            zoom={zoom} pitch={pitch} bearing={bearing}
+            mapStyle={mapStyle} lastUpdate={lastUpdate}
+          />
+        </div>
+      )}
 
       {/* ===== STATUS BAR ===== */}
       <footer className="absolute bottom-0 left-0 right-0 z-50 panel-solid border-x-0 border-b-0" data-testid="status-bar">
@@ -1122,8 +1243,8 @@ export default function CommandCenter() {
               <Hexagon className="w-7 h-7 text-cyan-400 animate-pulse" />
             </div>
           </div>
-          <div className="mt-6 font-mono text-[11px] tracking-[0.4em] text-cyan-300">CONNECTING · DGT 3.0 · DATEX2</div>
-          <div className="mt-2 font-mono text-[10px] tracking-[0.3em] text-cyan-600">RUNNING DIAGNOSTICS · ALPHA V.2</div>
+          <div className="mt-6 font-mono text-[11px] tracking-[0.4em] text-cyan-300">CONECTANDO · DGT 3.0 · DATEX2</div>
+          <div className="mt-2 font-mono text-[10px] tracking-[0.3em] text-cyan-600">EJECUTANDO DIAGNÓSTICO · ALPHA V.2</div>
         </div>
       )}
     </div>
