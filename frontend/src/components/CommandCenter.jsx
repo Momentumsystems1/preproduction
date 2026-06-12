@@ -9,8 +9,9 @@ import {
 import { STYLES } from "@/lib/mapStyles";
 import { fetchEvents, fetchParking, fetchCities, fetchHealth, geocode, fetchRoute, azureTileUrl } from "@/lib/api";
 import { KIND_ICON, KIND_GLYPH, KIND_LABEL, SEV_COLOR, SUBROUTINES, fmtTime, pad } from "@/lib/hudConstants";
-import { KPI, EventRow, EventDetail, Tel, StatusPill, SourceBadge } from "@/components/HudPrimitives";
+import { KPI, EventRow, EventDetail, StatusPill, SourceBadge } from "@/components/HudPrimitives";
 import RoutePanel from "@/components/RoutePanel";
+import BottomDock from "@/components/BottomDock";
 import { AzureToolbar, WeatherChip, EVPanel } from "@/components/AzureStack";
 import jsPDF from "jspdf";
 
@@ -101,6 +102,8 @@ export default function CommandCenter() {
     addLog("[NET ] Connecting to DGT 3.0 DATEX2 stream...", "info");
 
     return () => { map.remove(); mapRef.current = null; };
+    // Intentional run-once: map should only be initialised once at mount.
+    // `mapStyle`, `addLog`, etc. are handled by dedicated effects below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -116,11 +119,11 @@ export default function CommandCenter() {
           map.setTerrain({ source: "terrain-rgb", exaggeration: 1.4 });
           map.easeTo({ pitch: 60, bearing: -17, duration: 1200 });
         } catch (e) {
-          console.warn("setTerrain failed (3D unavailable):", e);
+          console.debug("setTerrain failed (3D unavailable):", e);
         }
       } else {
         try { map.setTerrain(null); } catch (e) {
-          console.warn("setTerrain(null) failed:", e);
+          console.debug("setTerrain(null) failed:", e);
         }
         map.easeTo({ pitch: 0, bearing: 0, duration: 800 });
       }
@@ -133,6 +136,10 @@ export default function CommandCenter() {
       ensureAzureLayer("satellite", showAzureSat);
     });
     addLog(`[VIEW] Switching render mode → ${mapStyle.toUpperCase()}`, "info");
+    // Intentional: the styledata callback above reads the latest state via closure
+    // when it fires AFTER setStyle finishes. Adding eventsData/parking/Azure toggles
+    // as deps would re-run setStyle every time any of them changes (= the whole map
+    // re-loads on every event refresh — undesired).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapStyle]);
 
@@ -146,6 +153,8 @@ export default function CommandCenter() {
     refreshHealth();
     const t = setInterval(refreshHealth, 60000);
     return () => clearInterval(t);
+    // Intentional run-once: cities and health are bootstrapped at mount.
+    // `addLog` is stable (useCallback with []) so it's safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1066,68 +1075,17 @@ export default function CommandCenter() {
       </aside>
 
       {/* ===== BOTTOM TABULAR PANEL ===== */}
-      <section className="absolute bottom-[30px] left-3 right-3 h-[160px] z-40 panel-solid brackets flex anim-fade-up" data-testid="diagnostic-panel">
-        {/* Left: Diagnostic Stream */}
-        <div className="w-[35%] border-r border-cyan-500/20 flex flex-col">
-          <div className="section-head"><span>DIAGNOSTIC STREAM</span><div className="flex items-center gap-1.5"><div className="live-dot" /><span className="text-cyan-300/60">RT</span></div></div>
-          <div className="flex-1 overflow-hidden relative bg-grid">
-            <div className="absolute inset-0 overflow-y-auto px-3 py-2 font-mono text-[10px] leading-relaxed">
-              {logs.length === 0 && <div className="text-cyan-700">{"// awaiting telemetry..."}</div>}
-              {logs.map((l) => (
-                <div key={l.id} className="flex gap-2 anim-fade-up" style={{ animationDuration: "180ms" }}>
-                  <span className="text-cyan-700 tabular-nums shrink-0">{fmtTime(l.t)}</span>
-                  <span className={l.kind === "err" ? "text-red-400" : l.kind === "ok" ? "text-emerald-400" : "text-cyan-300"}>
-                    {l.msg}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Middle: Severity tabular subsets (Atlantis style) */}
-        <div className="flex-1 border-r border-cyan-500/20 flex flex-col">
-          <div className="section-head"><span>EVENT SUBSET · TACTICAL TABLE</span><span className="text-cyan-300/60">FREQ 1.000Hz</span></div>
-          <div className="flex-1 overflow-hidden bg-stripes">
-            <div className="grid grid-cols-12 gap-px text-[10px] font-mono px-2 py-1.5 text-cyan-500/70 tracking-wider border-b border-cyan-500/10">
-              <div className="col-span-1">IDX</div>
-              <div className="col-span-2">REC</div>
-              <div className="col-span-2">KIND</div>
-              <div className="col-span-2">SEV</div>
-              <div className="col-span-2">SRC</div>
-              <div className="col-span-3 text-right">COORDS</div>
-            </div>
-            <div className="overflow-y-auto" style={{ maxHeight: "104px" }}>
-              {filteredFeatures.slice(0, 50).map((f, i) => (
-                <div key={f.id}
-                     onClick={() => { setSelected(f); mapRef.current?.flyTo({ center: [f.lon, f.lat], zoom: 14 }); }}
-                     className="grid grid-cols-12 gap-px text-[10px] font-mono px-2 py-0.5 cursor-pointer atlantis-row tracking-wide">
-                  <div className="col-span-1 text-cyan-700 tabular-nums">{pad(i + 1, 3)}</div>
-                  <div className="col-span-2 text-cyan-200 truncate">{f.id}</div>
-                  <div className="col-span-2 uppercase" style={{ color: `var(--${f.kind}, #67e8f9)` }}>{KIND_LABEL[f.kind] || f.kind}</div>
-                  <div className="col-span-2" style={{ color: SEV_COLOR[f.severity] || "#67e8f9" }}>{(f.severity || "info").toUpperCase()}</div>
-                  <div className="col-span-2 text-cyan-300/80">{f.source.split(" ")[0]}</div>
-                  <div className="col-span-3 text-right text-cyan-100 tabular-nums">{f.lat?.toFixed(3)},{f.lon?.toFixed(3)}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Right: Telemetry */}
-        <div className="w-[22%] flex flex-col">
-          <div className="section-head"><span>TELEMETRY</span><span className="text-cyan-300/60">v2.0</span></div>
-          <div className="flex-1 px-3 py-2 font-mono text-[10px] space-y-1.5">
-            <Tel label="LAT" value={mapCenter.lat.toFixed(5)} />
-            <Tel label="LON" value={mapCenter.lng.toFixed(5)} />
-            <Tel label="ZOOM" value={zoom} />
-            <Tel label="PITCH" value={`${pitch}°`} />
-            <Tel label="BEARING" value={`${bearing}°`} />
-            <Tel label="MODE" value={mapStyle.toUpperCase()} />
-            <Tel label="LAST SYNC" value={fmtTime(lastUpdate)} accent />
-          </div>
-        </div>
-      </section>
+      <BottomDock
+        logs={logs}
+        features={filteredFeatures}
+        onPickFeature={(f) => {
+          setSelected(f);
+          mapRef.current?.flyTo({ center: [f.lon, f.lat], zoom: 14 });
+        }}
+        mapCenter={mapCenter}
+        zoom={zoom} pitch={pitch} bearing={bearing}
+        mapStyle={mapStyle} lastUpdate={lastUpdate}
+      />
 
       {/* ===== STATUS BAR ===== */}
       <footer className="absolute bottom-0 left-0 right-0 z-50 panel-solid border-x-0 border-b-0" data-testid="status-bar">

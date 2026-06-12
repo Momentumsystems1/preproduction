@@ -16,7 +16,7 @@ import asyncio
 import html
 import httpx
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timezone
 
 ROOT_DIR = Path(__file__).parent
@@ -345,6 +345,78 @@ async def root():
 async def list_cities():
     return [{"id": k, **v} for k, v in CITIES.items()]
 
+SCT_CITIES = {"barcelona", "tarragona", "girona", "sct"}
+DEFAULT_CENTER = (40.41678, -3.70379)
+
+
+def _resolve_center(city: str, lat: Optional[float], lon: Optional[float]
+                    ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], float, float]:
+    """Resolve the operational center (lat/lon) and the city preset for an /events request."""
+    city = city.lower()
+    preset = CITIES.get(city)
+    if preset:
+        clat = lat if lat is not None else preset["lat"]
+        clon = lon if lon is not None else preset["lon"]
+    else:
+        clat = lat if lat is not None else DEFAULT_CENTER[0]
+        clon = lon if lon is not None else DEFAULT_CENTER[1]
+    return {"city": city}, preset, clat, clon
+
+
+def _active_sources(city: str, preset: Optional[Dict[str, Any]]) -> List[str]:
+    """Return the list of source labels active for this city."""
+    extra = preset.get("extra") if preset else None
+    labels = ["DGT 3.0"]
+    if extra == "sct" or city in SCT_CITIES:
+        labels.append("SCT")
+    if extra == "madrid" or city == "madrid":
+        labels.append("Madrid")
+    return labels
+
+
+async def _gather_sources(city: str, preset: Optional[Dict[str, Any]],
+                          clon: float, clat: float, radius_km: float) -> List[Any]:
+    extra = preset.get("extra") if preset else None
+    tasks: List[Any] = [fetch_dgt_events(clon, clat, radius_km)]
+    if extra == "sct" or city in SCT_CITIES:
+        tasks.append(fetch_sct_events())
+    if extra == "madrid" or city == "madrid":
+        tasks.append(fetch_madrid_events())
+    return await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _merge_features(results: List[Any], labels: List[str],
+                    clon: float, clat: float, radius_km: float
+                    ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    all_features: List[Dict[str, Any]] = []
+    source_health: Dict[str, str] = {}
+    for label, r in zip(labels, results):
+        if isinstance(r, Exception) or not isinstance(r, dict):
+            source_health[label] = "ERROR"
+            continue
+        source_health[label] = r.get("status", "UNKNOWN")
+        for f in r.get("features", []):
+            if haversine_km(clon, clat, f["lon"], f["lat"]) <= radius_km:
+                all_features.append(f)
+    sev_rank = {"critical": 0, "warning": 1, "info": 2}
+    all_features.sort(key=lambda x: sev_rank.get(x.get("severity"), 3))
+    return all_features, source_health
+
+
+def _compute_risk(features: List[Dict[str, Any]]) -> Tuple[Dict[str, int], str]:
+    counts = {"critical": 0, "warning": 0, "info": 0}
+    for f in features:
+        sev = f.get("severity", "info")
+        counts[sev] = counts.get(sev, 0) + 1
+    if counts["critical"] >= 5:
+        risk = "ALTO"
+    elif counts["critical"] >= 1 or counts["warning"] >= 10:
+        risk = "MEDIO"
+    else:
+        risk = "BAJO"
+    return counts, risk
+
+
 @api_router.get("/events")
 async def events(
     city: str = Query("madrid"),
@@ -353,57 +425,13 @@ async def events(
     radius_km: float = Query(150.0, ge=10, le=500),
 ):
     """Aggregated events from DGT + SCT + Madrid (when applicable) for the requested city."""
-    city = city.lower()
-    preset = CITIES.get(city)
-    if preset:
-        clat = lat if lat is not None else preset["lat"]
-        clon = lon if lon is not None else preset["lon"]
-    else:
-        clat = lat if lat is not None else 40.41678
-        clon = lon if lon is not None else -3.70379
-
-    tasks = [fetch_dgt_events(clon, clat, radius_km)]
-    extra = preset.get("extra") if preset else None
-    if extra == "sct" or city in ("barcelona", "tarragona", "girona", "sct"):
-        tasks.append(fetch_sct_events())
-    if extra == "madrid" or city == "madrid":
-        tasks.append(fetch_madrid_events())
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    all_features: List[Dict[str, Any]] = []
-    source_health: Dict[str, str] = {}
-    labels = ["DGT 3.0"]
-    if extra == "sct" or city in ("barcelona", "tarragona", "girona", "sct"):
-        labels.append("SCT")
-    if extra == "madrid" or city == "madrid":
-        labels.append("Madrid")
-    for label, r in zip(labels, results):
-        if isinstance(r, Exception) or not isinstance(r, dict):
-            source_health[label] = "ERROR"
-            continue
-        source_health[label] = r.get("status", "UNKNOWN")
-        for f in r.get("features", []):
-            # filter SCT by radius too
-            if haversine_km(clon, clat, f["lon"], f["lat"]) <= radius_km:
-                all_features.append(f)
-
-    # sort by severity
-    sev_rank = {"critical": 0, "warning": 1, "info": 2}
-    all_features.sort(key=lambda x: sev_rank.get(x.get("severity"), 3))
-
-    # KPI
-    severity_count = {"critical": 0, "warning": 0, "info": 0}
-    for f in all_features:
-        sev = f.get("severity", "info")
-        severity_count[sev] = severity_count.get(sev, 0) + 1
-    risk = "BAJO"
-    if severity_count["critical"] >= 5:
-        risk = "ALTO"
-    elif severity_count["critical"] >= 1 or severity_count["warning"] >= 10:
-        risk = "MEDIO"
-
+    base, preset, clat, clon = _resolve_center(city, lat, lon)
+    labels = _active_sources(base["city"], preset)
+    results = await _gather_sources(base["city"], preset, clon, clat, radius_km)
+    all_features, source_health = _merge_features(results, labels, clon, clat, radius_km)
+    severity_count, risk = _compute_risk(all_features)
     return {
-        "city": city,
+        "city": base["city"],
         "center": {"lat": clat, "lon": clon},
         "radius_km": radius_km,
         "count": len(all_features),

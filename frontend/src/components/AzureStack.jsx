@@ -123,7 +123,7 @@ export function EVPanel({ lat, lon, onClose, onPick }) {
       const d = await azureSearchEV(lat, lon, radius, 50, connector || undefined);
       setData(d);
     } catch (e) {
-      console.warn("EV fetch failed", e);
+      console.debug("EV fetch failed", e);
     } finally { setLoading(false); }
   }, [lat, lon, radius, connector]);
 
@@ -184,7 +184,8 @@ export function EVPanel({ lat, lon, onClose, onPick }) {
               {s.connectors.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-1">
                   {s.connectors.slice(0, 3).map((c, i) => (
-                    <span key={i} className="font-mono text-[8px] tracking-wider px-1 bg-cyan-500/10 border border-cyan-500/30 text-cyan-200">
+                    <span key={`${s.id}-conn-${c.type || "x"}-${i}`}
+                      className="font-mono text-[8px] tracking-wider px-1 bg-cyan-500/10 border border-cyan-500/30 text-cyan-200">
                       {(c.type || "?").replace("IEC62196", "")} {c.kw ? `· ${c.kw}kW` : ""}
                     </span>
                   ))}
