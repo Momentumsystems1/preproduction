@@ -426,6 +426,65 @@ async def geocode_endpoint(q: str):
         raise HTTPException(status_code=404, detail="No se encontró la dirección")
     return r
 
+# ----------------------------- OSRM routing -----------------------------
+OSRM_PROFILE = {
+    "car":   "https://router.project-osrm.org/route/v1/driving",
+    "truck": "https://router.project-osrm.org/route/v1/driving",
+    "bike":  "https://router.project-osrm.org/route/v1/cycling",
+    "foot":  "https://router.project-osrm.org/route/v1/foot",
+}
+
+@api_router.get("/route")
+async def route(
+    from_q: str = Query(..., alias="from"),
+    to_q: str = Query(..., alias="to"),
+    mode: str = Query("car"),
+):
+    """Compute a route using public OSRM. `from` and `to` may be 'lat,lon' or free text (geocoded)."""
+    async def resolve(q):
+        if "," in q:
+            try:
+                lat, lon = [float(x.strip()) for x in q.split(",", 1)]
+                return {"lat": lat, "lon": lon, "display_name": q}
+            except ValueError:
+                pass
+        return await geocode(q)
+
+    a, b = await asyncio.gather(resolve(from_q), resolve(to_q))
+    if not a or not b:
+        raise HTTPException(status_code=404, detail="No se pudo geocodificar uno de los puntos")
+
+    base = OSRM_PROFILE.get(mode, OSRM_PROFILE["car"])
+    url = f"{base}/{a['lon']},{a['lat']};{b['lon']},{b['lat']}?overview=full&geometries=geojson&steps=false&alternatives=false"
+    try:
+        async with httpx.AsyncClient(timeout=18, verify=False) as c:
+            r = await c.get(url, headers={"User-Agent": UA})
+            if r.status_code != 200:
+                raise HTTPException(status_code=502, detail=f"OSRM returned {r.status_code}")
+            j = r.json()
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"OSRM unreachable: {e}")
+
+    if j.get("code") != "Ok" or not j.get("routes"):
+        raise HTTPException(status_code=404, detail=j.get("message", "No route found"))
+    rt = j["routes"][0]
+
+    # rough CO2 estimate g/km per mode
+    co2_factor = {"car": 120.0, "truck": 280.0, "bike": 0.0, "foot": 0.0}.get(mode, 120.0)
+    km = rt["distance"] / 1000.0
+    return {
+        "mode": mode,
+        "from": a,
+        "to": b,
+        "distance_m": rt["distance"],
+        "duration_s": rt["duration"],
+        "distance_km": round(km, 2),
+        "duration_min": round(rt["duration"] / 60.0, 1),
+        "co2_g": round(km * co2_factor, 1),
+        "geometry": rt["geometry"],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
 @api_router.get("/health")
 async def health():
     async def check(url):

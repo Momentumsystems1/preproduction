@@ -57,16 +57,18 @@ Refactor of an existing tool that connects to DATEX DGT 3.0 and Servei Català d
 - [x] Pegasus Gate Diagnostic HUD style
 - [x] Geocoding search
 - [x] Multi-city support (10 Spanish cities)
+- [x] Density heatmap (MapLibre heatmap layer, weighted by severity)
+- [x] OSRM route optimizer (car/truck/bike/foot, distance + ETA + CO₂ estimate)
+- [x] Export GeoJSON (full features) + Export PDF tactical report (jsPDF)
 
 ## P1 / Backlog
-- Route optimizer (OSRM) — currently shown as OFFLINE subroutine
 - Mapillary street view inspection (token required)
-- Export GeoJSON / PDF report
 - V16 private beacon layer
-- Heatmap overlay
 - Time-series of events (last 24h)
 - WebSocket push for instant DGT updates
 - Per-event "actions" (assign to operator, escalate)
+- Client presentation mode (hide technical panels, big KPIs only)
+- Telegram/Slack alerts on critical events
 
 ## P2 / Future
 - Authentication and role-based access

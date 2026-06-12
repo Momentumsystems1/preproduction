@@ -4,10 +4,12 @@ import {
   Radio, AlertTriangle, Construction, OctagonAlert, TrendingUp, Layers, Ruler,
   SquareParking, Search, RotateCw, Mountain, Satellite, Map as MapIcon,
   Activity, Crosshair, Power, CloudRain, Loader2, Eye, X, ChevronRight, Hexagon,
+  Flame, Download, Route, FileText, FileJson, Navigation2,
 } from "lucide-react";
 
 import { STYLES } from "@/lib/mapStyles";
-import { fetchEvents, fetchParking, fetchCities, fetchHealth, geocode } from "@/lib/api";
+import { fetchEvents, fetchParking, fetchCities, fetchHealth, geocode, fetchRoute } from "@/lib/api";
+import jsPDF from "jspdf";
 
 const KIND_ICON = {
   obras: Construction,
@@ -34,7 +36,9 @@ const SUBROUTINES = [
   ["GTF-009", "SEVERITY MATRIX",      "ACTIVE"],
   ["GTF-010", "GEOSPATIAL FILTER",    "ACTIVE"],
   ["GTF-011", "PARKING AGGREGATOR",   "STANDBY"],
-  ["GTF-012", "ROUTE OPTIMIZER",      "OFFLINE"],
+  ["GTF-012", "ROUTE OPTIMIZER",      "ACTIVE"],
+  ["GTF-013", "DENSITY HEATMAP",      "STANDBY"],
+  ["GTF-014", "EXPORT ENGINE",        "ACTIVE"],
 ];
 
 function fmtTime(d) {
@@ -66,6 +70,14 @@ export default function CommandCenter() {
   const [measureDistance, setMeasureDistance] = useState(0);
   const [cursorMeasure, setCursorMeasure] = useState(null);
   const [showParking, setShowParking] = useState(false);
+  const [showHeatmap, setShowHeatmap] = useState(false);
+  const [showRoutePanel, setShowRoutePanel] = useState(false);
+  const [routeFrom, setRouteFrom] = useState("");
+  const [routeTo, setRouteTo] = useState("");
+  const [routeMode, setRouteMode] = useState("car");
+  const [routeResult, setRouteResult] = useState(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterKind, setFilterKind] = useState("all");
   const [pitch, setPitch] = useState(0);
@@ -365,6 +377,267 @@ export default function CommandCenter() {
     else { setMeasureMode(true); addLog("[TOOL] Measure tool armed · click points on map", "info"); }
   };
 
+  // ---- heatmap ----
+  const HEATMAP_SOURCE = "heatmap-events";
+  const HEATMAP_LAYER = "heatmap-events-layer";
+
+  const renderHeatmap = useCallback(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    // remove first
+    if (map.getLayer(HEATMAP_LAYER)) map.removeLayer(HEATMAP_LAYER);
+    if (map.getSource(HEATMAP_SOURCE)) map.removeSource(HEATMAP_SOURCE);
+    if (!showHeatmap || !eventsData) return;
+
+    const fc = {
+      type: "FeatureCollection",
+      features: eventsData.features.map((f) => ({
+        type: "Feature",
+        properties: {
+          weight: f.severity === "critical" ? 3 : f.severity === "warning" ? 2 : 1,
+        },
+        geometry: { type: "Point", coordinates: [f.lon, f.lat] },
+      })),
+    };
+    map.addSource(HEATMAP_SOURCE, { type: "geojson", data: fc });
+    map.addLayer({
+      id: HEATMAP_LAYER,
+      type: "heatmap",
+      source: HEATMAP_SOURCE,
+      maxzoom: 16,
+      paint: {
+        "heatmap-weight": ["interpolate", ["linear"], ["get", "weight"], 1, 0.4, 3, 1],
+        "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 1, 16, 3],
+        "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 0, 8, 16, 50],
+        "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 13, 0.85, 16, 0.55],
+        "heatmap-color": [
+          "interpolate", ["linear"], ["heatmap-density"],
+          0,    "rgba(34, 211, 238, 0)",
+          0.15, "rgba(34, 211, 238, 0.45)",
+          0.35, "rgba(125, 211, 252, 0.7)",
+          0.55, "rgba(251, 191, 36, 0.85)",
+          0.75, "rgba(249, 115, 22, 0.9)",
+          1.0,  "rgba(239, 68, 68, 0.95)",
+        ],
+      },
+    });
+  }, [showHeatmap, eventsData]);
+
+  useEffect(() => { renderHeatmap(); }, [renderHeatmap, mapStyle]);
+
+  const toggleHeatmap = () => {
+    setShowHeatmap((v) => {
+      const nv = !v;
+      addLog(`[TOOL] Density heatmap ${nv ? "engaged" : "disabled"}`, "info");
+      return nv;
+    });
+  };
+
+  // ---- route (OSRM) ----
+  const ROUTE_SOURCE = "route-line";
+  const ROUTE_LAYER = "route-line-layer";
+
+  const drawRoute = useCallback((geometry) => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (map.getLayer(ROUTE_LAYER)) map.removeLayer(ROUTE_LAYER);
+    if (map.getSource(ROUTE_SOURCE)) map.removeSource(ROUTE_SOURCE);
+    if (!geometry) return;
+    map.addSource(ROUTE_SOURCE, {
+      type: "geojson",
+      data: { type: "Feature", properties: {}, geometry },
+    });
+    map.addLayer({
+      id: ROUTE_LAYER,
+      type: "line",
+      source: ROUTE_SOURCE,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": "#fbbf24", "line-width": 5, "line-opacity": 0.85 },
+    });
+    // fit bounds
+    const coords = geometry.coordinates;
+    if (coords && coords.length) {
+      const lons = coords.map((c) => c[0]);
+      const lats = coords.map((c) => c[1]);
+      const bounds = [[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]];
+      map.fitBounds(bounds, { padding: { top: 200, bottom: 220, left: 380, right: 380 }, duration: 1200 });
+    }
+  }, []);
+
+  const clearRoute = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (map.getLayer(ROUTE_LAYER)) map.removeLayer(ROUTE_LAYER);
+    if (map.getSource(ROUTE_SOURCE)) map.removeSource(ROUTE_SOURCE);
+    setRouteResult(null);
+  }, []);
+
+  const runRoute = async () => {
+    if (!routeFrom.trim() || !routeTo.trim()) {
+      addLog("[ROUTE] Origin and destination required", "err");
+      return;
+    }
+    setRouteLoading(true);
+    addLog(`[ROUTE] Optimizing ${routeMode.toUpperCase()} route...`, "info");
+    try {
+      const r = await fetchRoute(routeFrom, routeTo, routeMode);
+      setRouteResult(r);
+      drawRoute(r.geometry);
+      addLog(`[ROUTE] ${r.distance_km}km · ${r.duration_min}min · CO₂≈${r.co2_g}g`, "ok");
+    } catch (e) {
+      const msg = e.response?.data?.detail || e.message;
+      addLog(`[ROUTE] ${msg}`, "err");
+      setRouteResult({ error: msg });
+    } finally {
+      setRouteLoading(false);
+    }
+  };
+
+  // ---- export GeoJSON / PDF ----
+  const downloadBlob = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 500);
+  };
+
+  const exportGeoJSON = () => {
+    if (!eventsData) return;
+    const fc = {
+      type: "FeatureCollection",
+      generator: "Momentum Road Command Center · Pegasus v2.0",
+      generated_at: new Date().toISOString(),
+      city: eventsData.city,
+      count: eventsData.count,
+      risk: eventsData.risk,
+      features: eventsData.features.map((f) => ({
+        type: "Feature",
+        properties: {
+          id: f.id, kind: f.kind, severity: f.severity,
+          title: f.title, description: f.description,
+          road: f.road, source: f.source, timestamp: f.timestamp,
+        },
+        geometry: { type: "Point", coordinates: [f.lon, f.lat] },
+      })),
+    };
+    const blob = new Blob([JSON.stringify(fc, null, 2)], { type: "application/geo+json" });
+    downloadBlob(blob, `mrc_${eventsData.city}_${new Date().toISOString().slice(0, 19).replace(/:/g, "")}.geojson`);
+    addLog(`[EXP ] GeoJSON export · ${fc.features.length} features`, "ok");
+    setExportOpen(false);
+  };
+
+  const exportPDF = () => {
+    if (!eventsData) return;
+    const doc = new jsPDF({ unit: "pt", format: "a4" });
+    const W = doc.internal.pageSize.getWidth();
+    const PAGE_H = doc.internal.pageSize.getHeight();
+
+    // background header
+    doc.setFillColor(2, 10, 20);
+    doc.rect(0, 0, W, 90, "F");
+    doc.setTextColor(34, 211, 238);
+    doc.setFont("courier", "bold").setFontSize(18);
+    doc.text("MOMENTUM ROAD COMMAND CENTER", 40, 38);
+    doc.setFont("courier", "normal").setFontSize(9);
+    doc.text("PEGASUS · GATE DIAGNOSTICS · TACTICAL REPORT", 40, 56);
+    doc.setTextColor(125, 211, 252);
+    doc.text(`SECTOR: ${(eventsData.city || "—").toUpperCase()}    GENERATED: ${new Date().toISOString().replace("T", " ").slice(0, 19)} UTC`, 40, 74);
+
+    // summary
+    let y = 120;
+    doc.setTextColor(34, 211, 238);
+    doc.setFont("courier", "bold").setFontSize(11);
+    doc.text("SUMMARY", 40, y);
+    doc.setDrawColor(34, 211, 238);
+    doc.line(40, y + 4, W - 40, y + 4);
+    y += 22;
+
+    doc.setTextColor(20, 20, 20);
+    doc.setFont("helvetica", "normal").setFontSize(10);
+    const rows = [
+      ["Total situation records", String(eventsData.count)],
+      ["Risk level", eventsData.risk],
+      ["Critical events", String(eventsData.severity.critical || 0)],
+      ["Warning events", String(eventsData.severity.warning || 0)],
+      ["Info events", String(eventsData.severity.info || 0)],
+      ["Radius", `${eventsData.radius_km} km`],
+      ["Center", `${eventsData.center.lat.toFixed(5)}, ${eventsData.center.lon.toFixed(5)}`],
+      ["Data sources", Object.entries(eventsData.sources).map(([k, v]) => `${k}: ${v}`).join("  ·  ")],
+    ];
+    rows.forEach(([k, v]) => {
+      doc.setFont("courier", "bold"); doc.text(k, 40, y);
+      doc.setFont("courier", "normal"); doc.text(v, 220, y);
+      y += 16;
+    });
+
+    // route if any
+    if (routeResult && !routeResult.error) {
+      y += 8;
+      doc.setTextColor(34, 211, 238);
+      doc.setFont("courier", "bold").setFontSize(11);
+      doc.text("ROUTE OPTIMIZATION", 40, y);
+      doc.line(40, y + 4, W - 40, y + 4);
+      y += 22;
+      doc.setTextColor(20, 20, 20).setFont("courier", "normal").setFontSize(10);
+      [
+        ["Origin", routeResult.from?.display_name || routeFrom],
+        ["Destination", routeResult.to?.display_name || routeTo],
+        ["Mode", routeResult.mode],
+        ["Distance", `${routeResult.distance_km} km`],
+        ["Duration", `${routeResult.duration_min} min`],
+        ["Estimated CO₂", `${routeResult.co2_g} g`],
+      ].forEach(([k, v]) => {
+        doc.setFont("courier", "bold"); doc.text(k, 40, y);
+        doc.setFont("courier", "normal"); doc.text(String(v).slice(0, 60), 220, y);
+        y += 16;
+      });
+    }
+
+    // top events table
+    y += 12;
+    doc.setTextColor(34, 211, 238).setFont("courier", "bold").setFontSize(11);
+    doc.text("TOP EVENTS · TACTICAL TABLE", 40, y);
+    doc.line(40, y + 4, W - 40, y + 4);
+    y += 18;
+
+    doc.setFont("courier", "bold").setFontSize(8).setTextColor(60, 60, 60);
+    doc.text("IDX", 40, y); doc.text("ID", 70, y);
+    doc.text("KIND", 150, y); doc.text("SEV", 230, y);
+    doc.text("SRC", 280, y); doc.text("ROAD", 360, y); doc.text("COORD", 500, y);
+    y += 4;
+    doc.setDrawColor(180, 180, 180);
+    doc.line(40, y, W - 40, y);
+    y += 12;
+
+    doc.setFont("courier", "normal").setFontSize(8).setTextColor(20, 20, 20);
+    const list = eventsData.features.slice(0, 80);
+    list.forEach((f, i) => {
+      if (y > PAGE_H - 60) { doc.addPage(); y = 60; }
+      doc.text(String(i + 1).padStart(3, "0"), 40, y);
+      doc.text((f.id || "").slice(0, 14), 70, y);
+      doc.text((f.kind || "").toUpperCase(), 150, y);
+      doc.text((f.severity || "").toUpperCase(), 230, y);
+      doc.text((f.source || "").split(" ")[0], 280, y);
+      doc.text((f.road || "").slice(0, 26), 360, y);
+      doc.text(`${f.lat.toFixed(3)},${f.lon.toFixed(3)}`, 500, y);
+      y += 12;
+    });
+
+    // footer
+    const pageCount = doc.internal.getNumberOfPages();
+    for (let p = 1; p <= pageCount; p++) {
+      doc.setPage(p);
+      doc.setFontSize(8).setTextColor(120, 120, 120).setFont("courier", "normal");
+      doc.text(`Momentum Road Command Center · Pegasus v2.0 · page ${p}/${pageCount}`, W / 2, PAGE_H - 20, { align: "center" });
+    }
+
+    doc.save(`mrc_${eventsData.city}_${new Date().toISOString().slice(0, 19).replace(/:/g, "")}.pdf`);
+    addLog(`[EXP ] PDF tactical report generated · ${list.length} rows`, "ok");
+    setExportOpen(false);
+  };
+
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
     addLog(`[NET ] Geocoding "${searchQuery}"...`, "info");
@@ -531,6 +804,38 @@ export default function CommandCenter() {
             PARKING {parkingData ? `[${parkingData.count}]` : ""}
           </button>
 
+          <button data-testid="heatmap-btn" onClick={toggleHeatmap}
+            className={`flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono tracking-wide border transition-colors ${showHeatmap ? "bg-cyan-400 text-[#020a14] border-cyan-400" : "bg-transparent border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10"}`}>
+            <Flame className="w-3 h-3" />
+            HEATMAP {showHeatmap ? "· ON" : ""}
+          </button>
+
+          <button data-testid="route-btn" onClick={() => setShowRoutePanel((v) => !v)}
+            className={`flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono tracking-wide border transition-colors ${showRoutePanel ? "bg-cyan-400 text-[#020a14] border-cyan-400" : "bg-transparent border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10"}`}>
+            <Route className="w-3 h-3" />
+            ROUTE
+          </button>
+
+          <div className="relative">
+            <button data-testid="export-btn" onClick={() => setExportOpen((v) => !v)}
+              className={`flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono tracking-wide border transition-colors ${exportOpen ? "bg-cyan-400 text-[#020a14] border-cyan-400" : "bg-transparent border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10"}`}>
+              <Download className="w-3 h-3" />
+              EXPORT
+            </button>
+            {exportOpen && (
+              <div className="absolute top-full mt-1 left-0 panel-solid brackets z-[60] w-[160px]">
+                <button data-testid="export-geojson" onClick={exportGeoJSON}
+                  className="w-full text-left flex items-center gap-2 px-3 py-2 hover:bg-cyan-500/15 font-mono text-[10px] tracking-wider text-cyan-100">
+                  <FileJson className="w-3 h-3 text-cyan-400" /> GEOJSON
+                </button>
+                <button data-testid="export-pdf" onClick={exportPDF}
+                  className="w-full text-left flex items-center gap-2 px-3 py-2 hover:bg-cyan-500/15 font-mono text-[10px] tracking-wider text-cyan-100 border-t border-cyan-500/15">
+                  <FileText className="w-3 h-3 text-cyan-400" /> PDF REPORT
+                </button>
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center gap-1.5 px-3 py-1 border border-cyan-500/30">
             <Layers className="w-3 h-3 text-cyan-400" />
             <select
@@ -560,6 +865,75 @@ export default function CommandCenter() {
           )}
         </div>
       </header>
+
+      {/* ===== ROUTE OPTIMIZER PANEL ===== */}
+      {showRoutePanel && (
+        <div className="absolute top-[150px] left-1/2 -translate-x-1/2 z-[55] w-[460px] panel-solid brackets anim-fade-up" data-testid="route-panel">
+          <div className="section-head">
+            <span>ROUTE OPTIMIZER · OSRM</span>
+            <button onClick={() => { setShowRoutePanel(false); clearRoute(); }} className="text-cyan-300/60 hover:text-cyan-100">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <div className="px-3 py-3 space-y-2">
+            <div>
+              <label className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 block mb-1">ORIGIN</label>
+              <input data-testid="route-from" value={routeFrom} onChange={(e) => setRouteFrom(e.target.value)}
+                placeholder="dirección, ciudad o 'lat,lon'"
+                className="w-full bg-cyan-500/5 border border-cyan-500/25 px-2 py-1.5 text-xs font-mono outline-none text-cyan-100 placeholder:text-cyan-700/70" />
+            </div>
+            <div>
+              <label className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 block mb-1">DESTINATION</label>
+              <input data-testid="route-to" value={routeTo} onChange={(e) => setRouteTo(e.target.value)}
+                placeholder="dirección, ciudad o 'lat,lon'"
+                className="w-full bg-cyan-500/5 border border-cyan-500/25 px-2 py-1.5 text-xs font-mono outline-none text-cyan-100 placeholder:text-cyan-700/70" />
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex-1">
+                <label className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80 block mb-1">VEHICLE PROFILE</label>
+                <select data-testid="route-mode" value={routeMode} onChange={(e) => setRouteMode(e.target.value)}
+                  className="w-full bg-cyan-500/5 border border-cyan-500/25 px-2 py-1.5 text-xs font-mono outline-none text-cyan-100 cursor-pointer">
+                  <option value="car" className="bg-[#020a14]">CAR · 120 g CO₂/km</option>
+                  <option value="truck" className="bg-[#020a14]">TRUCK · 280 g CO₂/km</option>
+                  <option value="bike" className="bg-[#020a14]">BIKE · 0 g CO₂/km</option>
+                  <option value="foot" className="bg-[#020a14]">FOOT · 0 g CO₂/km</option>
+                </select>
+              </div>
+              <button data-testid="route-run" onClick={runRoute} disabled={routeLoading}
+                className="self-end flex items-center gap-1.5 px-3 py-1.5 bg-cyan-400 text-[#020a14] hover:bg-cyan-300 disabled:opacity-50 text-[11px] font-mono tracking-wider font-bold">
+                {routeLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Navigation2 className="w-3 h-3" />}
+                {routeLoading ? "RUN..." : "OPTIMIZE"}
+              </button>
+              <button data-testid="route-clear" onClick={() => { clearRoute(); setRouteFrom(""); setRouteTo(""); }}
+                className="self-end px-2 py-1.5 bg-transparent border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10 text-[10px] font-mono tracking-wider">
+                CLR
+              </button>
+            </div>
+
+            {routeResult && !routeResult.error && (
+              <div className="mt-2 grid grid-cols-3 gap-2 border-t border-cyan-500/15 pt-3">
+                <div>
+                  <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80">DISTANCE</div>
+                  <div className="font-mono text-lg text-cyan-100 tabular-nums">{routeResult.distance_km}<span className="text-[10px] text-cyan-500"> km</span></div>
+                </div>
+                <div>
+                  <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80">ETA</div>
+                  <div className="font-mono text-lg text-amber-300 tabular-nums">{routeResult.duration_min}<span className="text-[10px] text-cyan-500"> min</span></div>
+                </div>
+                <div>
+                  <div className="font-mono text-[9px] tracking-[0.22em] text-cyan-500/80">CO₂ EST.</div>
+                  <div className="font-mono text-lg text-emerald-300 tabular-nums">{routeResult.co2_g}<span className="text-[10px] text-cyan-500"> g</span></div>
+                </div>
+              </div>
+            )}
+            {routeResult && routeResult.error && (
+              <div className="mt-2 px-2 py-1.5 bg-red-500/10 border border-red-500/30 font-mono text-[10px] tracking-wider text-red-300">
+                ▸ {routeResult.error}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ===== LEFT PANEL ===== */}
       <aside

@@ -16,3 +16,6 @@ export const fetchCities = () => api.get("/cities").then((r) => r.data);
 export const fetchHealth = () => api.get("/health").then((r) => r.data);
 
 export const geocode = (q) => api.get("/geocode", { params: { q } }).then((r) => r.data);
+
+export const fetchRoute = (from_q, to_q, mode = "car") =>
+  api.get("/route", { params: { from: from_q, to: to_q, mode } }).then((r) => r.data);
