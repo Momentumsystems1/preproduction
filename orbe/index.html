@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>My Cluster</title>
+<style>
+  :root{
+    --navy:#16305e; --navy-deep:#0e1f42; --bg:#0a1730; --panel:rgba(6,16,36,.82);
+    --cyan:#2fb3ec; --cyan-deep:#1b8fd4; --sky:#6fd2f7; --white:#ffffff;
+    --ink:#dfeaf6; --ink-dim:#8fa8c9; --line:rgba(111,210,247,.22);
+    --ok:#35d99a; --warn:#fbbf24;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
+    font-family:"Segoe UI",system-ui,-apple-system,Roboto,sans-serif;touch-action:none}
+  button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+
+  /* ---------- cabecera ---------- */
+  #topbar{position:fixed;top:0;left:0;right:0;z-index:60;display:flex;align-items:center;gap:10px;
+    padding:10px 14px;background:linear-gradient(180deg,rgba(10,23,48,.96),rgba(10,23,48,.75));
+    border-bottom:1px solid var(--line)}
+  #topbar .brand{font-weight:800;letter-spacing:.22em;font-size:14px;color:var(--white)}
+  #topbar .brand b{color:var(--cyan)}
+  #topbar .sub{font-size:9px;letter-spacing:.3em;color:var(--ink-dim);margin-top:2px}
+  #sharepill{display:none;align-items:center;gap:7px;margin-left:auto;padding:6px 10px;border-radius:20px;
+    background:rgba(9,46,32,.92);border:1px solid rgba(53,217,154,.5);color:var(--ok);
+    font-size:9px;letter-spacing:.12em;font-weight:700}
+  #sharepill.on{display:flex}
+  #sharepill .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* ---------- mapa ---------- */
+  #map{position:fixed;inset:0;overflow:hidden;background:var(--navy-deep)}
+  #map.light{background:#eef3f8}
+  #mapSvg{position:absolute;left:0;top:0;width:1600px;height:1000px}
+  #markers{position:absolute;inset:0;pointer-events:none}
+  .mk{position:absolute;transform:translate(-50%,-100%);pointer-events:auto;cursor:pointer;z-index:5}
+  .mk svg{display:block;filter:drop-shadow(0 3px 6px rgba(0,0,0,.45))}
+  .mk-label{position:absolute;transform:translate(-50%,0);top:4px;left:50%;pointer-events:auto;cursor:pointer;
+    background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:5px 10px;
+    font-size:11px;font-weight:700;letter-spacing:.06em;color:var(--white);white-space:nowrap;z-index:6;
+    box-shadow:0 4px 14px rgba(0,0,0,.4)}
+  .mk-label small{display:block;font-size:8px;letter-spacing:.18em;color:var(--cyan);font-weight:600}
+  #me{position:absolute;transform:translate(-50%,-50%);z-index:4;pointer-events:none}
+  #me .core{width:16px;height:16px;border-radius:50%;background:var(--cyan);border:3px solid #fff;
+    box-shadow:0 0 0 4px rgba(47,179,236,.25)}
+  #me .ring{position:absolute;inset:-14px;border-radius:50%;border:2px solid rgba(47,179,236,.5);animation:ping 2.2s infinite}
+  @keyframes ping{0%{transform:scale(.5);opacity:1}100%{transform:scale(1.4);opacity:0}}
+  .avatar-dot{position:absolute;transform:translate(-50%,-50%);width:30px;height:30px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff;
+    border:2.5px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4);z-index:4}
+  #zoomctl{position:fixed;right:12px;bottom:120px;z-index:40;display:flex;flex-direction:column;gap:6px}
+  #zoomctl button{width:38px;height:38px;border-radius:10px;background:var(--panel);border:1px solid var(--line);
+    color:var(--cyan);font-size:18px;font-weight:800}
+  #routechip{position:fixed;left:50%;transform:translateX(-50%);bottom:120px;z-index:40;display:none;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 14px;
+    font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--white);align-items:center;gap:10px}
+  #routechip.on{display:flex}
+  #routechip b{color:var(--cyan)}
+  #routechip button{color:var(--ink-dim);font-size:13px;padding:2px 6px}
+
+  /* ---------- orbe ---------- */
+  #orb{position:fixed;z-index:55;width:66px;height:66px;border-radius:50%;cursor:grab;
+    background:radial-gradient(circle at 32% 28%,#7fdcff 0%,#2fb3ec 32%,#1b5fa8 68%,#0e2a56 100%);
+    box-shadow:0 6px 22px rgba(47,179,236,.45),inset 0 -6px 14px rgba(6,20,46,.6),inset 0 4px 10px rgba(255,255,255,.35);
+    display:flex;align-items:center;justify-content:center;user-select:none;touch-action:none}
+  #orb:active{cursor:grabbing}
+  #orb .glint{position:absolute;top:9px;left:13px;width:16px;height:10px;border-radius:50%;
+    background:rgba(255,255,255,.75);filter:blur(2px);transform:rotate(-18deg)}
+  #orb svg{width:30px;height:30px}
+  #orb .badge{position:absolute;bottom:-3px;right:-3px;width:20px;height:20px;border-radius:50%;
+    background:var(--navy);border:2px solid var(--cyan);display:flex;align-items:center;justify-content:center;
+    font-size:10px;color:var(--cyan);font-weight:800}
+
+  /* ---------- tarjetas ---------- */
+  .card{position:fixed;z-index:50;width:min(320px,88vw);border-radius:16px;overflow:hidden;
+    background:rgba(4,12,28,.72);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    border:1px solid var(--line);box-shadow:0 14px 40px rgba(0,0,0,.55)}
+  .card.dragging{opacity:.92;box-shadow:0 22px 60px rgba(0,0,0,.7)}
+  .card-head{display:flex;align-items:center;gap:8px;padding:10px 12px;cursor:grab;user-select:none;touch-action:none;
+    background:linear-gradient(90deg,rgba(27,143,212,.28),rgba(22,48,94,.28));border-bottom:1px solid var(--line)}
+  .card-head:active{cursor:grabbing}
+  .card-head .ci{width:22px;height:22px;flex:none}
+  .card-head .t{flex:1;font-size:11px;font-weight:800;letter-spacing:.14em;color:var(--white);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card-head .hb{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+    color:var(--ink-dim);font-size:15px;font-weight:800}
+  .card-head .hb:hover{background:rgba(111,210,247,.15);color:var(--white)}
+  .card-body{padding:12px}
+  .card .addr{font-size:10px;color:var(--ink-dim);letter-spacing:.08em;margin-bottom:10px}
+  .card .addr b{color:var(--cyan)}
+  .tgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .tool{display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 4px;border-radius:12px;
+    background:rgba(22,48,94,.45);border:1px solid rgba(111,210,247,.14);transition:transform .12s,border-color .12s}
+  .tool:active{transform:scale(.94)}
+  .tool.on{border-color:var(--cyan);background:rgba(27,143,212,.3)}
+  .tool svg{width:26px;height:26px}
+  .tool span{font-size:8.5px;letter-spacing:.1em;font-weight:700;color:var(--ink);text-align:center}
+  .seg{display:flex;gap:6px;margin-top:10px}
+  .seg button{flex:1;padding:8px 4px;border-radius:10px;background:rgba(22,48,94,.5);border:1px solid rgba(111,210,247,.16);
+    font-size:10px;font-weight:800;letter-spacing:.06em;color:var(--ink)}
+  .seg button.on{background:var(--cyan-deep);border-color:var(--cyan);color:#fff}
+  .card input[type=text]{width:100%;padding:9px 10px;border-radius:10px;border:1px solid var(--line);
+    background:rgba(10,23,48,.8);color:var(--white);font-size:12px;outline:none}
+  .card .mini{margin-top:8px;width:100%;padding:9px;border-radius:10px;background:var(--cyan-deep);
+    color:#fff;font-size:11px;font-weight:800;letter-spacing:.1em}
+  .plist{max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
+  .plist .row{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:10px;
+    background:rgba(22,48,94,.45);border:1px solid rgba(111,210,247,.12);font-size:11px}
+  .plist .row b{color:var(--white)}
+  .plist .row .go{margin-left:auto;color:var(--cyan);font-size:10px;font-weight:800;letter-spacing:.08em}
+  .member{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;
+    background:rgba(22,48,94,.45);border:1px solid rgba(111,210,247,.12)}
+  .member .av{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    font-size:11px;font-weight:800;color:#fff;border:2px solid #fff}
+  .member .nm{flex:1;font-size:11px;font-weight:700}
+  .member .st{font-size:8.5px;letter-spacing:.1em;color:var(--ok)}
+  .switch{width:38px;height:20px;border-radius:12px;background:rgba(111,210,247,.2);position:relative;flex:none}
+  .switch::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s}
+  .switch.on{background:var(--cyan-deep)}
+  .switch.on::after{left:20px}
+
+  /* ---------- dock de pestañas ---------- */
+  #dock{position:fixed;left:0;right:0;bottom:0;z-index:58;display:none;gap:6px;padding:8px 10px;
+    background:linear-gradient(0deg,rgba(6,16,36,.97),rgba(6,16,36,.85));border-top:1px solid var(--line);
+    overflow-x:auto}
+  #dock.on{display:flex}
+  .tab{flex:none;display:flex;align-items:center;gap:7px;padding:8px 12px;border-radius:12px;
+    background:rgba(22,48,94,.6);border:1px solid var(--line);font-size:10px;font-weight:800;
+    letter-spacing:.1em;color:var(--ink)}
+  .tab svg{width:16px;height:16px}
+  .tab .x{color:var(--ink-dim);font-size:12px;padding:0 2px}
+  .tab .hint{position:fixed;bottom:64px;left:50%;transform:translateX(-50%);font-size:9px;letter-spacing:.2em;
+    color:var(--cyan);background:var(--panel);padding:5px 12px;border-radius:14px;border:1px solid var(--line)}
+
+  /* ---------- toast ---------- */
+  #toast{position:fixed;top:64px;left:50%;transform:translateX(-50%) translateY(-16px);z-index:70;
+    background:var(--panel);border:1px solid var(--cyan);border-radius:12px;padding:9px 16px;
+    font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--white);opacity:0;pointer-events:none;
+    transition:opacity .2s,transform .2s;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+  #toast b{color:var(--cyan)}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div>
+    <div class="brand">MY <b>CLUSTER</b></div>
+    <div class="sub">TU GENTE · TU ZONA</div>
+  </div>
+  <button id="sharepill"><span class="dot"></span><span>COMPARTIENDO EN VIVO · TOCA PARA PARAR</span></button>
+</div>
+
+<div id="map">
+  <svg id="mapSvg" width="1600" height="1000"></svg>
+  <div id="markers"></div>
+  <div id="me"><div class="ring"></div><div class="core"></div></div>
+</div>
+
+<div id="zoomctl">
+  <button id="zin">+</button>
+  <button id="zout">−</button>
+</div>
+
+<div id="routechip"><span id="routetxt"></span><button id="routex">✕</button></div>
+
+<div id="orb" style="left:18px;bottom:110px">
+  <div class="glint"></div>
+  <svg viewBox="0 0 24 24" fill="none"><path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7Z" fill="#fff"/><circle cx="12" cy="9" r="2.6" fill="#16305e"/></svg>
+  <div class="badge">+</div>
+</div>
+
+<div id="dock"></div>
+<div id="toast"></div>
+
+<script>
+/* ============================================================
+   MY CLUSTER · fake-first del nuevo navegador
+   Todo funciona en local; el backend real está simulado.
+   ============================================================ */
+const $ = (s) => document.querySelector(s);
+const NAVY = "#16305e", CYAN = "#2fb3ec", SKY = "#6fd2f7";
+
+/* ---------- iconos SVG (estilo de la referencia: pin bicolor) ---------- */
+const IC = {
+  pin:      '<svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7Z" fill="__A__"/><circle cx="12" cy="9" r="2.6" fill="__B__"/><ellipse cx="12" cy="21.4" rx="5" ry="1.6" fill="none" stroke="__B__" stroke-width="1.4"/></svg>',
+  marker:   '<svg viewBox="0 0 24 24"><path d="M12 3a6.4 6.4 0 0 1 6.4 6.4c0 4.6-6.4 11.6-6.4 11.6S5.6 14 5.6 9.4A6.4 6.4 0 0 1 12 3Z" fill="__A__"/><circle cx="12" cy="9.4" r="2.4" fill="__B__"/><circle cx="12" cy="17" r="4.4" fill="none" stroke="__B__" stroke-width="1.3"/></svg>',
+  gps:      '<svg viewBox="0 0 24 24"><path d="M4 16 8 4l3 6 2-3 7 9-8 6Z" fill="__A__"/><path d="M9 13c1-2 4-2 5 0" stroke="__B__" stroke-width="1.6" fill="none" stroke-dasharray="2 2"/><path d="M14 3a5 5 0 0 1 5 5c0 3-3 6-3 6s-3-3-3-6a5 5 0 0 1 3-5Z" fill="__B__"/><circle cx="16.5" cy="7.6" r="1.5" fill="#fff"/></svg>',
+  route:    '<svg viewBox="0 0 24 24"><path d="M5 4a3.4 3.4 0 0 1 3.4 3.4C8.4 10 5 13 5 13s-3.4-3-3.4-5.6A3.4 3.4 0 0 1 5 4Z" fill="__B__"/><path d="M18 11a3.4 3.4 0 0 1 3.4 3.4c0 2.6-3.4 5.6-3.4 5.6s-3.4-3-3.4-5.6A3.4 3.4 0 0 1 18 11Z" fill="__A__"/><path d="M6 13c0 4 4 3 6 3s5 0 6-2" stroke="__B__" stroke-width="1.8" fill="none" stroke-dasharray="3 2.4"/></svg>',
+  live:     '<svg viewBox="0 0 24 24"><path d="M12 6a5.4 5.4 0 0 1 5.4 5.4c0 4-5.4 9.6-5.4 9.6S6.6 15.4 6.6 11.4A5.4 5.4 0 0 1 12 6Z" fill="__A__"/><circle cx="12" cy="11.4" r="2" fill="__B__"/><path d="M3.5 8a12 12 0 0 0 0 7M20.5 8a12 12 0 0 1 0 7" stroke="__B__" stroke-width="1.7" fill="none" stroke-linecap="round"/></svg>',
+  tracking: '<svg viewBox="0 0 24 24"><path d="M12 3a5.6 5.6 0 0 1 5.6 5.6c0 4-5.6 9.4-5.6 9.4S6.4 12.6 6.4 8.6A5.6 5.6 0 0 1 12 3Z" fill="__A__"/><circle cx="12" cy="8.6" r="2" fill="#fff"/><rect x="9" y="15" width="6" height="6" rx="1" fill="__B__"/><path d="M4 20c2-2.4 4-2.4 5-1M20 20c-2-2.4-4-2.4-5-1" stroke="__B__" stroke-width="1.5" fill="none"/></svg>',
+  flag:     '<svg viewBox="0 0 24 24"><path d="M6 3a3.2 3.2 0 0 1 3.2 3.2c0 2.4-3.2 5-3.2 5S2.8 8.6 2.8 6.2A3.2 3.2 0 0 1 6 3Z" fill="__A__"/><path d="M12 4v15" stroke="__B__" stroke-width="2"/><path d="M12 4h8l-2.4 3.4L20 11h-8Z" fill="__B__"/><ellipse cx="12" cy="20.4" rx="4.4" ry="1.4" fill="none" stroke="__A__" stroke-width="1.3"/></svg>',
+  edit:     '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="13" height="17" rx="3" fill="__A__"/><path d="M9.5 6.4a2.6 2.6 0 0 1 2.6 2.6c0 1.9-2.6 4-2.6 4s-2.6-2.1-2.6-4a2.6 2.6 0 0 1 2.6-2.6Z" fill="#fff"/><path d="M14.5 17.5 19 13l2.5 2.5-4.5 4.5h-2.5Z" fill="__B__"/></svg>',
+  here:     '<svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7Z" fill="__A__"/><circle cx="12" cy="9" r="3.4" fill="#fff"/><circle cx="12" cy="9" r="1.8" fill="__B__"/></svg>',
+  streetmap:'<svg viewBox="0 0 24 24"><path d="M3 6 9 3v15l-6 3ZM9 3l6 3v15l-6-3ZM15 6l6-3v15l-6 3Z" fill="__A__"/><path d="M15 3a3 3 0 0 1 3 3c0 2.2-3 4.6-3 4.6S12 8.2 12 6a3 3 0 0 1 3-3Z" fill="__B__"/></svg>',
+  address:  '<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="14" rx="3.4" fill="__A__"/><path d="M12 5.6a2.8 2.8 0 0 1 2.8 2.8c0 2-2.8 4.2-2.8 4.2s-2.8-2.2-2.8-4.2A2.8 2.8 0 0 1 12 5.6Z" fill="#fff"/><path d="M8 21h8l-1.4-3H9.4Z" fill="__B__"/></svg>',
+  world:    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="__A__"/><path d="M3.5 12h17M12 3c-5.5 5-5.5 13 0 18M12 3c5.5 5 5.5 13 0 18" stroke="__B__" stroke-width="1.4" fill="none"/><path d="M17 3.4a2.8 2.8 0 0 1 2.8 2.8c0 2-2.8 4.2-2.8 4.2s-2.8-2.2-2.8-4.2A2.8 2.8 0 0 1 17 3.4Z" fill="__B__"/></svg>',
+  position: '<svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 1 6 6c0 4.2-6 10-6 10S6 13.2 6 9a6 6 0 0 1 6-6Z" fill="__A__"/><circle cx="12" cy="9" r="2.2" fill="#fff"/><path d="M12 14v7M7.5 18l-2 3M16.5 18l2 3" stroke="__B__" stroke-width="1.7" fill="none" stroke-linecap="round"/></svg>',
+  meet:     '<svg viewBox="0 0 24 24"><circle cx="15.5" cy="6" r="2.6" fill="__A__"/><path d="M11 21v-6.5A3.5 3.5 0 0 1 14.5 11h2a3.5 3.5 0 0 1 3.5 3.5V21Z" fill="__A__"/><path d="M6 3a3.4 3.4 0 0 1 3.4 3.4C9.4 9 6 12 6 12s-3.4-3-3.4-5.6A3.4 3.4 0 0 1 6 3Z" fill="__B__"/><circle cx="6" cy="6.4" r="1.3" fill="#fff"/></svg>',
+  convoy:   '<svg viewBox="0 0 24 24"><path d="M3 15l1.6-4.6A2.4 2.4 0 0 1 6.9 8.8h5.2a2.4 2.4 0 0 1 2.3 1.6L16 15v4h-2.4a2.2 2.2 0 0 0-4.2 0H6.4a2.2 2.2 0 0 0-4.2-.8H3Z" fill="__A__"/><path d="M17 3a3.2 3.2 0 0 1 3.2 3.2c0 2.4-3.2 5-3.2 5s-3.2-2.6-3.2-5A3.2 3.2 0 0 1 17 3Z" fill="__B__"/></svg>',
+  star:     '<svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7Z" fill="__A__"/><path d="m12 5.8 1 2 2.2.3-1.6 1.6.4 2.2-2-1-2 1 .4-2.2-1.6-1.6 2.2-.3Z" fill="__B__"/><ellipse cx="12" cy="21.4" rx="5" ry="1.6" fill="none" stroke="__B__" stroke-width="1.4"/></svg>',
+  places:   '<svg viewBox="0 0 24 24"><path d="M8 5a4.4 4.4 0 0 1 4.4 4.4c0 3.2-4.4 7.6-4.4 7.6S3.6 12.6 3.6 9.4A4.4 4.4 0 0 1 8 5Z" fill="__A__"/><path d="M17 8a3.6 3.6 0 0 1 3.6 3.6c0 2.6-3.6 6.4-3.6 6.4s-3.6-3.8-3.6-6.4A3.6 3.6 0 0 1 17 8Z" fill="__B__"/></svg>',
+  check:    '<svg viewBox="0 0 24 24"><circle cx="9" cy="9" r="7" fill="__B__"/><path d="m5.8 9.4 2.2 2.2 4-4.4" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M17 9l4-2v10l-4 2Z" fill="__A__"/></svg>',
+};
+const icon = (name, a = CYAN, b = "#ffffff") => IC[name].split("__A__").join(a).split("__B__").join(b);
+
+/* ---------- datos simulados: calles ---------- */
+const H_STREETS = [
+  { y: 150, name: "GRAN VÍA" }, { y: 300, name: "CALLE MAYOR" }, { y: 450, name: "CALLE DE ALCALÁ" },
+  { y: 600, name: "CALLE DE ATOCHA" }, { y: 750, name: "PASEO DEL PRADO" }, { y: 900, name: "CALLE DE TOLEDO" },
+];
+const V_STREETS = [
+  { x: 200, name: "CALLE DE SERRANO" }, { x: 400, name: "CALLE DE GOYA" }, { x: 600, name: "CALLE DEL CARMEN" },
+  { x: 800, name: "PLAZA DEL SOL" }, { x: 1000, name: "CALLE DE FUENCARRAL" }, { x: 1200, name: "CALLE DE HORTALEZA" }, { x: 1400, name: "AVENIDA DE AMÉRICA" },
+];
+const WORLD = { w: 1600, h: 1000 };
+const ME = { x: 800, y: 520 };   // "estoy aquí"
+
+/* ---------- estado ---------- */
+const state = {
+  pan: { x: 0, y: 0 }, zoom: 1, light: false,
+  pins: [], seq: 1, sharing: false, members: false,
+  saved: JSON.parse(localStorage.getItem("mc:saved") || "[]"),
+  route: null,
+};
+const saveState = () => localStorage.setItem("mc:saved", JSON.stringify(state.saved));
+
+/* ---------- mapa ---------- */
+const svg = $("#mapSvg"), mapEl = $("#map"), markersEl = $("#markers");
+function drawMap() {
+  const st = state.light
+    ? { bg: "#eef3f8", block: "#e2eaf2", road: "#ffffff", roadE: "#c7d4e2", txt: "#16305e", num: "#5b7fb3", park: "#cfe8d8" }
+    : { bg: "#0e1f42", block: "#152e5e", road: "#2c4a8a", roadE: "#3a5ca8", txt: "#8fb4e4", num: "#6d92c4", park: "#16406a" };
+  let s = `<rect width="${WORLD.w}" height="${WORLD.h}" fill="${st.bg}"/>`;
+  // manzanas
+  for (let i = 0; i < V_STREETS.length - 1; i++)
+    for (let j = 0; j < H_STREETS.length - 1; j++) {
+      const x = V_STREETS[i].x + 8, y = H_STREETS[j].y + 8, w = V_STREETS[i + 1].x - V_STREETS[i].x - 16, h = H_STREETS[j + 1].y - H_STREETS[j].y - 16;
+      s += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="${st.block}"/>`;
+    }
+  // parque
+  s += `<rect x="860" y="465" width="270" height="250" rx="16" fill="${st.park}"/>
+        <text x="995" y="596" text-anchor="middle" font-size="13" letter-spacing="4" fill="${st.txt}" opacity=".8">PARQUE</text>`;
+  // calles
+  H_STREETS.forEach((c) => {
+    s += `<line x1="0" y1="${c.y}" x2="${WORLD.w}" y2="${c.y}" stroke="${st.roadE}" stroke-width="17"/>
+          <line x1="0" y1="${c.y}" x2="${WORLD.w}" y2="${c.y}" stroke="${st.road}" stroke-width="13"/>
+          <text x="${WORLD.w / 2}" y="${c.y - 13}" text-anchor="middle" font-size="12" letter-spacing="3" font-weight="700" fill="${st.txt}">${c.name}</text>`;
+    for (let x = 60; x < WORLD.w; x += 80) {
+      const n = 2 + Math.round(x / 40) * 2;
+      s += `<text x="${x}" y="${c.y + 26}" text-anchor="middle" font-size="9" fill="${st.num}">${n}</text>`;
+    }
+  });
+  V_STREETS.forEach((c) => {
+    s += `<line x1="${c.x}" y1="0" x2="${c.x}" y2="${WORLD.h}" stroke="${st.roadE}" stroke-width="17"/>
+          <line x1="${c.x}" y1="0" x2="${c.x}" y2="${WORLD.h}" stroke="${st.road}" stroke-width="13"/>
+          <text x="${c.x + 13}" y="${WORLD.h / 2}" font-size="12" letter-spacing="3" font-weight="700" fill="${st.txt}"
+            transform="rotate(-90 ${c.x + 13} ${WORLD.h / 2})" text-anchor="middle">${c.name}</text>`;
+  });
+  // ruta activa
+  if (state.route) {
+    const p = state.route.path.map((q, i) => `${i ? "L" : "M"}${q.x},${q.y}`).join(" ");
+    s += `<path d="${p}" fill="none" stroke="${CYAN}" stroke-width="5" stroke-dasharray="12 8" stroke-linecap="round" opacity=".95"/>`;
+  }
+  svg.innerHTML = s;
+  svg.setAttribute("viewBox", `0 0 ${WORLD.w} ${WORLD.h}`);
+  applyView();
+}
+function applyView() {
+  const sc = Math.max(mapEl.clientWidth / WORLD.w, mapEl.clientHeight / WORLD.h) * state.zoom;
+  const ox = (mapEl.clientWidth - WORLD.w * sc) / 2 + state.pan.x;
+  const oy = (mapEl.clientHeight - WORLD.h * sc) / 2 + state.pan.y;
+  svg.style.transformOrigin = "0 0";
+  svg.style.transform = `translate(${ox}px,${oy}px) scale(${sc})`;
+  state._sc = sc; state._ox = ox; state._oy = oy;
+  // marcadores
+  markersEl.querySelectorAll("[data-wx]").forEach((el) => {
+    el.style.left = (ox + el.dataset.wx * sc) + "px";
+    el.style.top = (oy + el.dataset.wy * sc) + "px";
+  });
+  const me = $("#me");
+  me.style.left = (ox + ME.x * sc) + "px";
+  me.style.top = (oy + ME.y * sc) + "px";
+}
+const toWorld = (cx, cy) => ({ x: (cx - state._ox) / state._sc, y: (cy - state._oy) / state._sc });
+
+/* pan del mapa (arrastrar fondo) + click */
+(() => {
+  let drag = null;
+  mapEl.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".mk,.mk-label,.card,#orb")) return;
+    drag = { x: e.clientX, y: e.clientY, pan: { ...state.pan }, moved: 0 };
+  });
+  window.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    drag.moved = Math.max(drag.moved, Math.hypot(dx, dy));
+    state.pan.x = drag.pan.x + dx; state.pan.y = drag.pan.y + dy;
+    applyView();
+  });
+  window.addEventListener("pointerup", (e) => {
+    if (!drag) return;
+    const wasClick = drag.moved < 6;
+    drag = null;
+    if (wasClick && !e.target.closest(".mk,.mk-label,.card,#orb,#zoomctl,#topbar,#dock")) {
+      const w = toWorld(e.clientX, e.clientY);
+      if (w.x > 0 && w.x < WORLD.w && w.y > 0 && w.y < WORLD.h) dropPin(w);
+    }
+  });
+})();
+$("#zin").onclick = () => { state.zoom = Math.min(3, state.zoom * 1.3); applyView(); };
+$("#zout").onclick = () => { state.zoom = Math.max(0.6, state.zoom / 1.3); applyView(); };
+
+/* ---------- geocodificación simulada ---------- */
+function reverseGeocode(w) {
+  let best = null, dmin = 1e9;
+  H_STREETS.forEach((c) => { const d = Math.abs(w.y - c.y); if (d < dmin) { dmin = d; best = { name: c.name, num: 2 + Math.round(w.x / 40) * 2, horiz: true, c }; } });
+  V_STREETS.forEach((c) => { const d = Math.abs(w.x - c.x); if (d < dmin) { dmin = d; best = { name: c.name, num: 2 + Math.round(w.y / 40) * 2, horiz: false, c }; } });
+  if (dmin > 60) return { name: "ZONA SIN NOMBRE", num: "s/n" };
+  return { name: best.name, num: Math.max(1, best.num) };
+}
+
+/* ---------- pines ---------- */
+let swallowClicks = 0;   // evita que el "click" sintético del mismo toque dispare una herramienta
+document.addEventListener("click", (e) => {
+  if (swallowClicks > 0) { swallowClicks--; e.stopPropagation(); e.preventDefault(); }
+}, true);
+function dropPin(w) {
+  const addr = reverseGeocode(w);
+  const pin = { id: "p" + state.seq++, x: w.x, y: w.y, label: `${addr.name} ${addr.num}`, addr };
+  state.pins.push(pin);
+  swallowClicks = 1;
+  const el = document.createElement("div");
+  el.className = "mk"; el.dataset.wx = w.x; el.dataset.wy = w.y; el.id = "mk-" + pin.id;
+  el.innerHTML = icon("pin", CYAN, NAVY).replace('viewBox', 'width="34" height="34" viewBox');
+  el.addEventListener("pointerup", (e) => { e.stopPropagation(); openPointCard(pin); });
+  const lb = document.createElement("div");
+  lb.className = "mk-label"; lb.dataset.wx = w.x; lb.dataset.wy = w.y; lb.id = "lb-" + pin.id;
+  lb.innerHTML = `<small>PUNTO</small>${pin.label}`;
+  lb.addEventListener("pointerup", (e) => { e.stopPropagation(); openPointCard(pin); });
+  markersEl.append(el, lb);
+  applyView();
+  openPointCard(pin);
+  toast(`Punto marcado: <b>${pin.label}</b>`);
+}
+const getPinEl = (pin) => [$("#mk-" + pin.id), $("#lb-" + pin.id)];
+
+/* ---------- sistema de tarjetas (mover / minimizar / anclar / pestañas) ---------- */
+const dock = $("#dock");
+const cards = {};   // id → {el, tab, title, iconName, docked, pos}
+let zTop = 50;
+
+function openCard({ id, title, iconName, body, x, y, onClose }) {
+  if (cards[id]) {                      // ya existe → restaurar y traer al frente
+    const c = cards[id];
+    if (c.docked) undock(id);
+    c.el.style.zIndex = ++zTop;
+    return c;
+  }
+  const el = document.createElement("div");
+  el.className = "card"; el.id = "card-" + id;
+  el.style.left = Math.max(8, Math.min(x ?? 60, innerWidth - 330)) + "px";
+  el.style.top = Math.max(56, Math.min(y ?? 90, innerHeight - 320)) + "px";
+  el.style.zIndex = ++zTop;
+  el.innerHTML = `
+    <div class="card-head">
+      <span class="ci">${icon(iconName)}</span>
+      <span class="t">${title}</span>
+      <button class="hb" data-act="min" title="Minimizar">–</button>
+      <button class="hb" data-act="close" title="Cerrar">✕</button>
+    </div>
+    <div class="card-body">${body}</div>`;
+  document.body.appendChild(el);
+  const c = { el, tab: null, title, iconName, docked: false, onClose, pos: null };
+  cards[id] = c;
+
+  el.querySelector('[data-act="min"]').onclick = () => dockCard(id);
+  el.querySelector('[data-act="close"]').onclick = () => closeCard(id);
+  el.addEventListener("pointerdown", () => { el.style.zIndex = ++zTop; });
+
+  /* arrastrar por la cabecera; soltar abajo = anclar como pestaña */
+  const head = el.querySelector(".card-head");
+  head.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".hb")) return;
+    const r = el.getBoundingClientRect();
+    const off = { x: e.clientX - r.left, y: e.clientY - r.top };
+    el.classList.add("dragging");
+    let hint = null;
+    const move = (ev) => {
+      el.style.left = Math.max(-40, Math.min(ev.clientX - off.x, innerWidth - 80)) + "px";
+      el.style.top = Math.max(50, Math.min(ev.clientY - off.y, innerHeight - 60)) + "px";
+      const near = ev.clientY > innerHeight - 90;
+      if (near && !hint) { hint = document.createElement("div"); hint.className = "hint"; hint.textContent = "SUELTA AQUÍ PARA ANCLAR"; dock.appendChild(hint); }
+      if (!near && hint) { hint.remove(); hint = null; }
+    };
+    const up = (ev) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      el.classList.remove("dragging");
+      if (hint) { hint.remove(); hint = null; }
+      if (ev.clientY > innerHeight - 90) dockCard(id);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  });
+  return c;
+}
+
+function dockCard(id) {
+  const c = cards[id]; if (!c || c.docked) return;
+  c.docked = true;
+  c.pos = { left: c.el.style.left, top: c.el.style.top };
+  c.el.style.display = "none";
+  const tab = document.createElement("button");
+  tab.className = "tab"; tab.id = "tab-" + id;
+  tab.innerHTML = `${icon(c.iconName)}<span>${c.title}</span><span class="x" title="Cerrar">✕</span>`;
+  tab.addEventListener("click", (e) => {
+    if (e.target.classList.contains("x")) { closeCard(id); return; }
+    undock(id);
+  });
+  dock.appendChild(tab);
+  c.tab = tab;
+  dock.classList.add("on");
+}
+function undock(id) {
+  const c = cards[id]; if (!c || !c.docked) return;
+  c.docked = false;
+  c.el.style.display = "";
+  if (c.pos) { c.el.style.left = c.pos.left; c.el.style.top = c.pos.top; }
+  c.el.style.zIndex = ++zTop;
+  c.tab.remove(); c.tab = null;
+  if (!dock.querySelector(".tab")) dock.classList.remove("on");
+}
+function closeCard(id) {
+  const c = cards[id]; if (!c) return;
+  c.el.remove();
+  if (c.tab) { c.tab.remove(); if (!dock.querySelector(".tab")) dock.classList.remove("on"); }
+  delete cards[id];
+  c.onClose && c.onClose();
+}
+
+/* ---------- toast ---------- */
+let toastT = null;
+function toast(html) {
+  const t = $("#toast");
+  t.innerHTML = html; t.classList.add("on");
+  clearTimeout(toastT);
+  toastT = setTimeout(() => t.classList.remove("on"), 2400);
+}
+
+/* ---------- herramientas ---------- */
+function toolBtn(name, label, action, extra = "") {
+  return `<button class="tool ${extra}" data-tool="${name}" data-act2="${action}">${icon(name)}<span>${label}</span></button>`;
+}
+
+/* tarjeta de un punto del mapa */
+function openPointCard(pin) {
+  const r = mapEl.getBoundingClientRect();
+  const mobile = r.width < 600;
+  const c = openCard({
+    id: "pt-" + pin.id, title: pin.label, iconName: "pin",
+    x: mobile ? (r.width - Math.min(320, r.width * 0.88)) / 2
+              : Math.min(r.width - 340, Math.max(10, (pin.x * state._sc + state._ox) - 160)),
+    y: mobile ? 110   // en móvil la tarjeta nunca se abre debajo del dedo
+              : Math.max(60, (pin.y * state._sc + state._oy) - 240),
+    body: `
+      <div class="addr">DIRECCIÓN · <b>${pin.label}</b>, MADRID · ${pin.x.toFixed(0)}, ${pin.y.toFixed(0)}</div>
+      <div class="tgrid">
+        ${toolBtn("route", "RUTA AQUÍ", "route")}
+        ${toolBtn("marker", "GUARDAR", "save")}
+        ${toolBtn("live", "COMPARTIR", "share")}
+        ${toolBtn("meet", "QUEDAR", "meet")}
+        ${toolBtn("convoy", "CONVOY", "convoy")}
+        ${toolBtn("flag", "MARCAR", "flag")}
+        ${toolBtn("edit", "RENOMBRAR", "rename")}
+        ${toolBtn("here", "ESTOY AQUÍ", "here")}
+        ${toolBtn("address", "COPIAR DIR.", "copy")}
+      </div>
+      <div class="seg" id="seg-${pin.id}" style="display:none">
+        <button data-m="car">🚗 <span></span></button><button data-m="bike">🚲 <span></span></button><button data-m="foot">🚶 <span></span></button>
+      </div>`,
+  });
+  c.el.querySelectorAll("[data-act2]").forEach((b) => {
+    b.onclick = () => pointTool(b.dataset.act2, pin, b);
+  });
+}
+
+function pointTool(act, pin, btn) {
+  if (act === "route") {
+    const seg = $("#seg-" + pin.id);
+    seg.style.display = "flex";
+    const km = Math.hypot(pin.x - ME.x, pin.y - ME.y) / 100;
+    const mins = { car: Math.max(2, Math.round(km * 2.4)), bike: Math.max(3, Math.round(km * 4.2)), foot: Math.max(5, Math.round(km * 12)) };
+    seg.querySelectorAll("button").forEach((b) => {
+      b.querySelector("span").textContent = mins[b.dataset.m] + " min";
+      b.onclick = () => {
+        seg.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
+        b.classList.add("on");
+        drawRoute(pin, b.dataset.m, mins[b.dataset.m], km);
+      };
+    });
+    drawRoute(pin, "car", mins.car, km);
+    seg.querySelector('[data-m="car"]').classList.add("on");
+  }
+  if (act === "save") {
+    if (!state.saved.find((s) => s.label === pin.label)) {
+      state.saved.unshift({ label: pin.label, x: pin.x, y: pin.y });
+      saveState();
+    }
+    btn.classList.add("on");
+    toast(`Guardado en tus lugares: <b>${pin.label}</b>`);
+  }
+  if (act === "share") toggleShare(true);
+  if (act === "meet") { addSpecial(pin, "meet", "#f59e0b"); toast(`Quedada creada en <b>${pin.label}</b> · invitación enviada a tu círculo`); }
+  if (act === "convoy") { addSpecial(pin, "convoy", "#a78bfa"); toast(`Convoy iniciado desde <b>${pin.label}</b> · tu círculo te sigue`); }
+  if (act === "flag") { addSpecial(pin, "flag", "#ef4444"); toast(`Bandera plantada en <b>${pin.label}</b>`); }
+  if (act === "here") { addSpecial(pin, "here", "#35d99a"); toast(`Has marcado <b>${pin.label}</b> como "estoy aquí"`); }
+  if (act === "rename") {
+    const body = btn.closest(".card-body");
+    body.innerHTML = `
+      <div class="addr">NUEVO NOMBRE PARA <b>${pin.label}</b></div>
+      <input type="text" id="rn-${pin.id}" value="${pin.label}" maxlength="40">
+      <button class="mini" id="rnok-${pin.id}">GUARDAR NOMBRE</button>`;
+    $("#rnok-" + pin.id).onclick = () => {
+      const v = $("#rn-" + pin.id).value.trim();
+      if (v) {
+        pin.label = v.toUpperCase();
+        $("#lb-" + pin.id).innerHTML = `<small>PUNTO</small>${pin.label}`;
+        cards["pt-" + pin.id].el.querySelector(".t").textContent = pin.label;
+        cards["pt-" + pin.id].title = pin.label;
+        closeCard("pt-" + pin.id);
+        openPointCard(pin);
+        toast(`Punto renombrado: <b>${pin.label}</b>`);
+      }
+    };
+  }
+  if (act === "copy") {
+    const txt = `${pin.label}, Madrid`;
+    (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject())
+      .then(() => toast(`Dirección copiada: <b>${txt}</b>`))
+      .catch(() => toast(`<b>${txt}</b>`));
+  }
+}
+
+function addSpecial(pin, kind, color) {
+  const el = document.createElement("div");
+  el.className = "mk"; el.dataset.wx = pin.x + 14; el.dataset.wy = pin.y - 6;
+  el.innerHTML = icon(kind === "meet" ? "meet" : kind === "convoy" ? "convoy" : kind === "flag" ? "flag" : "here", color, "#fff")
+    .replace("viewBox", 'width="26" height="26" viewBox');
+  markersEl.appendChild(el);
+  applyView();
+}
+
+/* ruta simulada por las calles (Manhattan) */
+function drawRoute(pin, mode, mins, km) {
+  const path = [{ x: ME.x, y: ME.y }];
+  const nearH = H_STREETS.reduce((a, b) => Math.abs(ME.y - b.y) < Math.abs(ME.y - a.y) ? b : a);
+  const nearHp = H_STREETS.reduce((a, b) => Math.abs(pin.y - b.y) < Math.abs(pin.y - a.y) ? b : a);
+  const nearV = V_STREETS.reduce((a, b) => Math.abs(pin.x - b.x) < Math.abs(pin.x - a.x) ? b : a);
+  path.push({ x: ME.x, y: nearH.y }, { x: nearV.x, y: nearH.y }, { x: nearV.x, y: nearHp.y }, { x: pin.x, y: nearHp.y }, { x: pin.x, y: pin.y });
+  state.route = { path };
+  drawMap();
+  const names = { car: "EN COCHE", bike: "EN BICI", foot: "A PIE" };
+  $("#routetxt").innerHTML = `${names[mode]} · <b>${mins} min</b> · ${km.toFixed(1)} km → ${pin.label}`;
+  $("#routechip").classList.add("on");
+}
+$("#routex").onclick = () => { state.route = null; drawMap(); $("#routechip").classList.remove("on"); };
+
+/* compartir en vivo (aviso siempre visible) */
+function toggleShare(on) {
+  state.sharing = on ?? !state.sharing;
+  $("#sharepill").classList.toggle("on", state.sharing);
+  toast(state.sharing ? "Compartiendo tu ubicación <b>en vivo</b> con tu círculo" : "Has <b>dejado de compartir</b> tu ubicación");
+}
+$("#sharepill").onclick = () => toggleShare(false);
+
+/* tarjeta del orbe: centro de herramientas */
+function openOrbCard() {
+  const orb = $("#orb").getBoundingClientRect();
+  const c = openCard({
+    id: "orb-tools", title: "HERRAMIENTAS", iconName: "pin",
+    x: Math.min(orb.left + 80, innerWidth - 340), y: Math.max(60, orb.top - 200),
+    body: `
+      <div class="tgrid">
+        ${toolBtn("gps", "MI GPS", "gps")}
+        ${toolBtn("live", "EN VIVO", "share", state.sharing ? "on" : "")}
+        ${toolBtn("tracking", "MI GENTE", "members")}
+        ${toolBtn("places", "LUGARES", "places")}
+        ${toolBtn("streetmap", "ESTILO MAPA", "style")}
+        ${toolBtn("world", "EXPLORAR", "explore")}
+      </div>`,
+  });
+  c.el.querySelectorAll("[data-act2]").forEach((b) => {
+    b.onclick = () => orbTool(b.dataset.act2, b);
+  });
+}
+function orbTool(act, btn) {
+  if (act === "gps") {
+    state.pan.x = 0; state.pan.y = 0; state.zoom = 1.15; applyView();
+    toast("Centrado en <b>tu posición</b>");
+  }
+  if (act === "share") { toggleShare(); btn.classList.toggle("on", state.sharing); }
+  if (act === "style") {
+    state.light = !state.light;
+    mapEl.classList.toggle("light", state.light);
+    drawMap();
+    btn.classList.toggle("on", state.light);
+    toast(state.light ? "Mapa <b>claro</b> activado" : "Mapa <b>oscuro</b> activado");
+  }
+  if (act === "explore") { state.pan = { x: 0, y: 0 }; state.zoom = 0.7; applyView(); toast("Vista <b>general de la zona</b>"); }
+  if (act === "members") openMembersCard();
+  if (act === "places") openPlacesCard();
+}
+
+/* mi gente (círculo familiar simulado) */
+const FAMILY = [
+  { n: "Lucía", c: "#f59e0b", x: 640, y: 340, st: "EN CASA" },
+  { n: "Marco", c: "#35d99a", x: 1020, y: 640, st: "EN CAMINO" },
+  { n: "Abuela", c: "#a78bfa", x: 430, y: 700, st: "QUIETA" },
+];
+function openMembersCard() {
+  const c = openCard({
+    id: "members", title: "MI GENTE", iconName: "tracking", x: innerWidth - 350, y: 80,
+    body: `<div class="plist">${FAMILY.map((m, i) => `
+      <div class="member">
+        <span class="av" style="background:${m.c}">${m.n[0]}</span>
+        <span class="nm">${m.n}<br><span class="st">${m.st}</span></span>
+        <button class="switch ${state.members ? "on" : ""}" data-i="${i}"></button>
+      </div>`).join("")}
+      </div>
+      <div class="addr" style="margin-top:10px">Solo se comparte cuando tú lo activas. Nada en segundo plano.</div>`,
+    onClose: clearAvatars,
+  });
+  c.el.querySelectorAll(".switch").forEach((sw) => {
+    sw.onclick = () => {
+      sw.classList.toggle("on");
+      const any = [...c.el.querySelectorAll(".switch")].some((x) => x.classList.contains("on"));
+      state.members = any;
+      renderAvatars();
+    };
+  });
+}
+function renderAvatars() {
+  clearAvatars();
+  if (!state.members) return;
+  FAMILY.forEach((m) => {
+    const el = document.createElement("div");
+    el.className = "avatar-dot fam"; el.dataset.wx = m.x; el.dataset.wy = m.y;
+    el.style.background = m.c; el.textContent = m.n[0];
+    markersEl.appendChild(el);
+  });
+  applyView();
+}
+const clearAvatars = () => document.querySelectorAll(".fam").forEach((e) => e.remove());
+
+/* lugares guardados */
+function openPlacesCard() {
+  const rows = state.saved.length
+    ? state.saved.map((s, i) => `<div class="row">${icon("marker", CYAN, "#fff").replace("viewBox", 'width="18" height="18" viewBox')}<b>${s.label}</b><button class="go" data-i="${i}">IR →</button></div>`).join("")
+    : `<div class="addr">Aún no has guardado lugares. Toca el mapa y pulsa GUARDAR.</div>`;
+  const c = openCard({
+    id: "places", title: "MIS LUGARES", iconName: "places", x: 30, y: 90,
+    body: `<div class="plist">${rows}</div>`,
+  });
+  c.el.querySelectorAll(".go").forEach((b) => {
+    b.onclick = () => {
+      const s = state.saved[b.dataset.i];
+      state.pan.x = (innerWidth / 2) - (state._ox + s.x * state._sc) - (innerWidth / 2 - (state._ox + s.x * state._sc));
+      state.pan.x = 0; state.pan.y = 0;
+      const dx = (state._ox + s.x * state._sc) - innerWidth / 2;
+      const dy = (state._oy + s.y * state._sc) - innerHeight / 2;
+      state.pan.x -= dx; state.pan.y -= dy;
+      applyView();
+      toast(`Volando a <b>${s.label}</b>`);
+    };
+  });
+}
+
+/* ---------- orbe: arrastrable + toque abre herramientas ---------- */
+(() => {
+  const orb = $("#orb");
+  let drag = null;
+  orb.addEventListener("pointerdown", (e) => {
+    const r = orb.getBoundingClientRect();
+    drag = { off: { x: e.clientX - r.left, y: e.clientY - r.top }, moved: 0 };
+  });
+  window.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const nx = Math.max(4, Math.min(e.clientX - drag.off.x, innerWidth - 70));
+    const ny = Math.max(54, Math.min(e.clientY - drag.off.y, innerHeight - 70));
+    drag.moved = Math.max(drag.moved, Math.abs(nx - orb.offsetLeft) + Math.abs(ny - orb.offsetTop));
+    orb.style.left = nx + "px"; orb.style.top = ny + "px"; orb.style.bottom = "auto";
+  });
+  window.addEventListener("pointerup", () => {
+    if (!drag) return;
+    const wasTap = drag.moved < 8;
+    drag = null;
+    if (wasTap) {
+      if (cards["orb-tools"]) closeCard("orb-tools");
+      else openOrbCard();
+    }
+  });
+})();
+
+/* ---------- arranque ---------- */
+drawMap();
+applyView();
+addEventListener("resize", applyView);
+setTimeout(() => toast("Toca el <b>mapa</b> para marcar un punto · arrastra el <b>orbe</b> donde quieras"), 700);
+</script>
+</body>
+</html>
